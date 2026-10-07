@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="System Audio Bridge (enhanced)">
+  <category name="FX">
+    <reapack name="System Audio Bridge (enhanced).vst3" type="extension" desc="System Audio Bridge (enhanced)">
+      <metadata>
+        <description><![CDATA[Windows VST3 that brings system audio into a REAPER track via WASAPI loopback, plays recorded audio back normally, and can send its output to the default Windows device. Installs to UserPlugins\FX; rescan plugins after install.]]></description>
+        <link rel="website">https://github.com/FmsJay/system-audio-bridge-enhanced</link>
+      </metadata>
+      <version name="1.0.0" author="FmsJay" time="2026-10-07T21:00:00Z">
+        <source platform="win64" file="FX/System Audio Bridge (enhanced).vst3">https://github.com/FmsJay/system-audio-bridge-enhanced/releases/download/v1.0.0/System-Audio-Bridge-enhanced.vst3</source>
+      </version>
+    </reapack>
+  </category>
+</index>
