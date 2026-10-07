@@ -16,6 +16,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout()
         NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "passInput", 1 }, "Mix track input with capture", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "send", 1 }, "Send output to default device", false));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "sendOnlyPlaying", 1 }, "Send only while REAPER is playing", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "sendGain", 1 }, "Send gain",
         NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
     return layout;
@@ -64,6 +65,7 @@ BridgeProcessor::BridgeProcessor()
     passInput     = params.getRawParameterValue ("passInput");
     sendOn        = params.getRawParameterValue ("send");
     sendGain      = params.getRawParameterValue ("sendGain");
+    sendOnlyPlaying = params.getRawParameterValue ("sendOnlyPlaying");
 
     startTimer (100);
 }
@@ -186,7 +188,8 @@ void BridgeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
 
-    if (render.isRunning() && sendOn->load() > 0.5f && numChannels > 0)
+    if (render.isRunning() && sendOn->load() > 0.5f && numChannels > 0
+        && (playing || sendOnlyPlaying->load() < 0.5f))
     {
         const float gain = juce::Decibels::decibelsToGain (sendGain->load(), -60.0f);
         const int chunkMax = (int) tmpL.size();

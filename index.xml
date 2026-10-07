@@ -6,6 +6,10 @@
         <description><![CDATA[Windows VST3 that brings system audio into a REAPER track via WASAPI loopback, plays recorded audio back normally, and can send its output to the default Windows device. Installs to UserPlugins\FX; rescan plugins after install.]]></description>
         <link rel="website">https://github.com/FmsJay/system-audio-bridge-enhanced</link>
       </metadata>
+      <version name="1.0.1" author="FmsJay" time="2026-10-07T21:30:00Z">
+        <changelog><![CDATA[+ "Send only while REAPER is playing" option]]></changelog>
+        <source platform="win64" file="FX/System Audio Bridge (enhanced).vst3">https://github.com/FmsJay/system-audio-bridge-enhanced/releases/download/v1.0.1/System-Audio-Bridge-enhanced.vst3</source>
+      </version>
       <version name="1.0.0" author="FmsJay" time="2026-10-07T21:00:00Z">
         <source platform="win64" file="FX/System Audio Bridge (enhanced).vst3">https://github.com/FmsJay/system-audio-bridge-enhanced/releases/download/v1.0.0/System-Audio-Bridge-enhanced.vst3</source>
       </version>

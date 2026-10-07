@@ -55,6 +55,7 @@ private:
     std::atomic<float>* passInput;
     std::atomic<float>* sendOn;
     std::atomic<float>* sendGain;
+    std::atomic<float>* sendOnlyPlaying;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BridgeProcessor)
 };

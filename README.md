@@ -39,6 +39,7 @@ always scans.
 | Capture gain | 0 dB | |
 | Mix track input with capture | off | Off replaces the track input with system audio |
 | Send output to default device | off | Plays the plugin's output on the default Windows device |
+| Send only while REAPER is playing | off | When on, the send goes silent while the transport is stopped (still sends while recording) |
 | Send gain | 0 dB | |
 
 The capture and send streams follow the Windows default device that was active when they started.
