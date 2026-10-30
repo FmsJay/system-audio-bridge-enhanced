@@ -1,5 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot 'source\emkaix-voicemeeter-chroma-dbae284'
+$patch = Join-Path $PSScriptRoot 'audio-shortcuts.patch'
+git -C $source apply --reverse --check $patch 2>$null
+if ($LASTEXITCODE) {
+    git -C $source apply --check $patch
+    if ($LASTEXITCODE) { throw 'Source differs from the expected Chroma revision or patch.' }
+    git -C $source apply $patch
+    if ($LASTEXITCODE) { throw 'Could not apply the audio shortcuts patch.' }
+}
 $build = Join-Path $PSScriptRoot 'build-x64'
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products '*' -version '[17,18)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -11,3 +19,4 @@ if ($LASTEXITCODE) { throw "CMake configure failed ($LASTEXITCODE)." }
 & $cmake --build $build --config Release --target vmchroma --parallel 4
 if ($LASTEXITCODE) { throw "Chroma compilation failed ($LASTEXITCODE)." }
 Get-FileHash -LiteralPath (Join-Path $source 'out\vmchroma64.dll')
+
