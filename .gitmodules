@@ -1,0 +1,3 @@
+[submodule "integrations/voicemeeter/source/emkaix-voicemeeter-chroma-dbae284"]
+	path = integrations/voicemeeter/source/emkaix-voicemeeter-chroma-dbae284
+	url = https://github.com/emkaix/voicemeeter-chroma.git
