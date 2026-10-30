@@ -14,9 +14,13 @@
 //==============================================================================
 void StereoRing::setSize (int frames)
 {
-    size = frames + 1;
-    L.assign ((size_t) size, 0.0f);
-    R.assign ((size_t) size, 0.0f);
+    // Reallocating races the audio thread, so restarts at the same rate (device retries) reuse the buffer.
+    if (size != frames + 1)
+    {
+        size = frames + 1;
+        L.assign ((size_t) size, 0.0f);
+        R.assign ((size_t) size, 0.0f);
+    }
     clear();
 }
 
@@ -167,16 +171,79 @@ IAudioClient* activateProcessLoopbackExcluding (DWORD pid)
     return client;
 }
 
-IAudioClient* activateDefaultRenderDevice()
+std::string toUtf8 (const wchar_t* text)
+{
+    if (text == nullptr || *text == 0) return {};
+    const int n = WideCharToMultiByte (CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    std::string out ((size_t) std::max (n - 1, 0), '\0');
+    if (n > 1) WideCharToMultiByte (CP_UTF8, 0, text, -1, out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+std::wstring toWide (const std::string& text)
+{
+    if (text.empty()) return {};
+    const int n = MultiByteToWideChar (CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    std::wstring out ((size_t) std::max (n - 1, 0), L'\0');
+    if (n > 1) MultiByteToWideChar (CP_UTF8, 0, text.c_str(), -1, out.data(), n);
+    return out;
+}
+
+// PKEY_Device_FriendlyName, spelled out to avoid needing INITGUID for the SDK's definition.
+const PROPERTYKEY friendlyNameKey { { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+
+std::string friendlyName (IMMDevice* device)
+{
+    IPropertyStore* props = nullptr;
+    std::string name;
+    if (SUCCEEDED (device->OpenPropertyStore (STGM_READ, &props)))
+    {
+        PROPVARIANT pv;
+        PropVariantInit (&pv);
+        if (SUCCEEDED (props->GetValue (friendlyNameKey, &pv)) && pv.vt == VT_LPWSTR)
+            name = toUtf8 (pv.pwszVal);
+        PropVariantClear (&pv);
+    }
+    safeRelease (props);
+    return name;
+}
+
+enum class Activation { ok, failed, missing };
+
+// The default render device when endpointId is empty, otherwise exactly that endpoint.
+// A selected endpoint that is unplugged, disabled or not a render device is "missing".
+IAudioClient* activateRenderDevice (const std::wstring& endpointId, Activation& result)
 {
     IMMDeviceEnumerator* enumerator = nullptr;
     IMMDevice* device = nullptr;
+    IMMEndpoint* endpoint = nullptr;
     IAudioClient* client = nullptr;
+    result = Activation::failed;
 
-    if (SUCCEEDED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS (&enumerator)))
-        && SUCCEEDED (enumerator->GetDefaultAudioEndpoint (eRender, eConsole, &device)))
-        device->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**> (&client));
+    if (SUCCEEDED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS (&enumerator))))
+    {
+        if (endpointId.empty())
+        {
+            if (SUCCEEDED (enumerator->GetDefaultAudioEndpoint (eRender, eConsole, &device)))
+                result = Activation::ok;
+        }
+        else
+        {
+            DWORD state = 0;
+            EDataFlow flow = eCapture;
+            const bool usable = SUCCEEDED (enumerator->GetDevice (endpointId.c_str(), &device))
+                                && SUCCEEDED (device->GetState (&state)) && state == DEVICE_STATE_ACTIVE
+                                && SUCCEEDED (device->QueryInterface (IID_PPV_ARGS (&endpoint)))
+                                && SUCCEEDED (endpoint->GetDataFlow (&flow)) && flow == eRender;
+            result = usable ? Activation::ok : Activation::missing;
+        }
 
+        if (result == Activation::ok
+            && FAILED (device->Activate (__uuidof (IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**> (&client))))
+            result = Activation::failed;
+    }
+
+    safeRelease (endpoint);
     safeRelease (device);
     safeRelease (enumerator);
     return client;
@@ -213,23 +280,91 @@ struct ProAudioScope
     ~ProAudioScope() { if (h) AvRevertMmThreadCharacteristics (h); }
     HANDLE h = nullptr;
 };
+
+std::string named (const char* prefix, const std::string& name)
+{
+    return name.empty() ? std::string (prefix) : std::string (prefix) + ": " + name;
+}
 } // namespace
 
 //==============================================================================
-void LoopbackCapture::start (int sampleRate, CaptureSource source)
+std::vector<AudioEndpoint> listRenderEndpoints()
 {
-    stop();
+    std::vector<AudioEndpoint> result;
+
+    // A private MTA thread keeps us out of whatever apartment the caller's thread is in.
+    std::thread ([&result]
+    {
+        ComScope com;
+        IMMDeviceEnumerator* enumerator = nullptr;
+        IMMDeviceCollection* devices = nullptr;
+        IMMDevice* defaultDevice = nullptr;
+        std::string defaultId;
+
+        if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS (&enumerator))))
+            return;
+
+        LPWSTR id = nullptr;
+        if (SUCCEEDED (enumerator->GetDefaultAudioEndpoint (eRender, eConsole, &defaultDevice))
+            && SUCCEEDED (defaultDevice->GetId (&id)))
+        {
+            defaultId = toUtf8 (id);
+            CoTaskMemFree (id);
+        }
+
+        UINT count = 0;
+        if (SUCCEEDED (enumerator->EnumAudioEndpoints (eRender, DEVICE_STATE_ACTIVE, &devices))
+            && SUCCEEDED (devices->GetCount (&count)))
+        {
+            for (UINT i = 0; i < count; ++i)
+            {
+                IMMDevice* device = nullptr;
+                id = nullptr;
+                if (SUCCEEDED (devices->Item (i, &device)) && SUCCEEDED (device->GetId (&id)))
+                {
+                    AudioEndpoint e;
+                    e.id = toUtf8 (id);
+                    e.name = friendlyName (device);
+                    if (e.name.empty()) e.name = e.id;
+                    e.isDefault = e.id == defaultId;
+                    result.push_back (std::move (e));
+                    CoTaskMemFree (id);
+                }
+                safeRelease (device);
+            }
+        }
+
+        safeRelease (defaultDevice);
+        safeRelease (devices);
+        safeRelease (enumerator);
+    }).join();
+
+    std::sort (result.begin(), result.end(), [] (const AudioEndpoint& a, const AudioEndpoint& b) { return a.name < b.name; });
+    return result;
+}
+
+//==============================================================================
+void LoopbackCapture::start (int sampleRate, CaptureSource source, const std::string& endpointId,
+                             const std::string& endpointName)
+{
+    join(); // keeps the last status visible until the new thread reports, so retries don't flicker
+    name = source == CaptureSource::selectedEndpoint ? endpointName : std::string();
     ring.setSize (sampleRate); // one second of headroom
     quit = false;
     running = true;
-    thread = std::thread ([this, sampleRate, source] { threadMain (sampleRate, source); });
+    thread = std::thread ([this, sampleRate, source, endpointId] { threadMain (sampleRate, source, endpointId); });
 }
 
-void LoopbackCapture::stop()
+void LoopbackCapture::join()
 {
     quit = true;
     if (thread.joinable()) thread.join();
     running = false;
+}
+
+void LoopbackCapture::stop()
+{
+    join();
     statusCode = 0;
 }
 
@@ -240,12 +375,15 @@ std::string LoopbackCapture::status() const
         case 1:  return "Capturing system audio (REAPER excluded)";
         case 2:  return "Capturing whole default device";
         case 3:  return "Process exclusion unavailable - capturing whole device (beware feedback)";
+        case 4:  return named ("Capturing whole-device loopback", name);
         case -1: return "Capture failed to start";
+        case -2: return named ("Capture device missing", name) + " - reconnect it or choose another";
+        case -3: return named ("Capture device lost", name) + " - retrying";
         default: return "Idle";
     }
 }
 
-void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
+void LoopbackCapture::threadMain (int sampleRate, CaptureSource source, std::string endpointId)
 {
     ComScope com;
     ProAudioScope mmcss;
@@ -253,6 +391,7 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
     IAudioClient* client = nullptr;
     bool isFloat = true;
     int code = 0;
+    auto activation = Activation::failed;
 
     if (source == CaptureSource::excludeHostProcess)
     {
@@ -263,9 +402,17 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
             safeRelease (client);
     }
 
-    if (code == 0)
+    if (source == CaptureSource::selectedEndpoint)
     {
-        client = activateDefaultRenderDevice();
+        client = activateRenderDevice (toWide (endpointId), activation);
+        if (client && initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat))
+            code = 4;
+        else
+            safeRelease (client);
+    }
+    else if (code == 0)
+    {
+        client = activateRenderDevice ({}, activation);
         if (client && initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat))
             code = source == CaptureSource::excludeHostProcess ? 3 : 2;
         else
@@ -280,7 +427,7 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
         || FAILED (client->GetService (IID_PPV_ARGS (&capture)))
         || FAILED (client->Start()))
     {
-        statusCode = -1;
+        statusCode = activation == Activation::missing ? -2 : -1;
         safeRelease (capture);
         safeRelease (client);
         CloseHandle (event);
@@ -296,7 +443,8 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
         WaitForSingleObject (event, 50);
 
         UINT32 packet = 0;
-        while (SUCCEEDED (capture->GetNextPacketSize (&packet)) && packet > 0)
+        HRESULT hr = S_OK;
+        while (SUCCEEDED (hr = capture->GetNextPacketSize (&packet)) && packet > 0)
         {
             BYTE* data = nullptr;
             UINT32 frames = 0;
@@ -326,38 +474,66 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source)
             capture->ReleaseBuffer (frames);
             ring.write (l.data(), r.data(), (int) frames); // drops on overflow; reader trims latency
         }
+
+        if (FAILED (hr)) // usually AUDCLNT_E_DEVICE_INVALIDATED: unplugged, disabled or format changed
+        {
+            statusCode = -3;
+            break;
+        }
     }
 
     client->Stop();
     safeRelease (capture);
     safeRelease (client);
     CloseHandle (event);
+    running = false; // lets the owner restart us after a lost device
 }
 
 //==============================================================================
-void DeviceRender::start (int sampleRate)
+void DeviceRender::start (int sampleRate, const std::string& endpointId, const std::string& endpointName)
 {
-    stop();
+    join();
+    name = endpointId.empty() ? std::string() : endpointName;
     ring.setSize (sampleRate);
     quit = false;
     running = true;
-    thread = std::thread ([this, sampleRate] { threadMain (sampleRate); });
+    thread = std::thread ([this, sampleRate, endpointId] { threadMain (sampleRate, endpointId); });
 }
 
-void DeviceRender::stop()
+void DeviceRender::join()
 {
     quit = true;
     if (thread.joinable()) thread.join();
     running = false;
 }
 
-void DeviceRender::threadMain (int sampleRate)
+void DeviceRender::stop()
+{
+    join();
+    statusCode = 0;
+}
+
+std::string DeviceRender::status() const
+{
+    switch (statusCode.load())
+    {
+        case 1:  return "Sending to default device";
+        case 2:  return named ("Sending to", name);
+        case -1: return "Send failed to start";
+        case -2: return named ("Send device missing", name) + " - reconnect it or choose another";
+        case -3: return named ("Send device lost", name) + " - retrying";
+        default: return "Send idle";
+    }
+}
+
+void DeviceRender::threadMain (int sampleRate, std::string endpointId)
 {
     ComScope com;
     ProAudioScope mmcss;
 
     bool isFloat = true;
-    IAudioClient* client = activateDefaultRenderDevice();
+    auto activation = Activation::failed;
+    IAudioClient* client = activateRenderDevice (toWide (endpointId), activation);
     IAudioRenderClient* render = nullptr;
     HANDLE event = CreateEventW (nullptr, FALSE, FALSE, nullptr);
     UINT32 bufferFrames = 0;
@@ -368,6 +544,7 @@ void DeviceRender::threadMain (int sampleRate)
         || FAILED (client->GetBufferSize (&bufferFrames))
         || FAILED (client->GetService (IID_PPV_ARGS (&render))))
     {
+        statusCode = activation == Activation::missing ? -2 : -1;
         safeRelease (render);
         safeRelease (client);
         CloseHandle (event);
@@ -380,6 +557,7 @@ void DeviceRender::threadMain (int sampleRate)
         render->ReleaseBuffer (bufferFrames, AUDCLNT_BUFFERFLAGS_SILENT);
 
     client->Start();
+    statusCode = endpointId.empty() ? 1 : 2;
 
     const int maxLatency = sampleRate / 10;    // 100 ms: beyond this, the clocks have drifted
     const int targetLatency = sampleRate / 50; // 20 ms
@@ -394,7 +572,10 @@ void DeviceRender::threadMain (int sampleRate)
 
         UINT32 padding = 0;
         if (FAILED (client->GetCurrentPadding (&padding)))
+        {
+            statusCode = -3;
             break;
+        }
 
         const UINT32 frames = bufferFrames - padding;
         if (frames == 0 || FAILED (render->GetBuffer (frames, &data)))
@@ -426,4 +607,5 @@ void DeviceRender::threadMain (int sampleRate)
     safeRelease (render);
     safeRelease (client);
     CloseHandle (event);
+    running = false; // previously stayed true after a device error, so the send never restarted
 }

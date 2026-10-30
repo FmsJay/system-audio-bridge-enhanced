@@ -25,10 +25,21 @@ private:
     std::atomic<int> readPos { 0 }, writePos { 0 };
 };
 
+// An active Windows render endpoint. Strings are UTF-8; id is the stable IMMDevice id.
+struct AudioEndpoint
+{
+    std::string id, name;
+    bool isDefault = false;
+};
+
+// Active render endpoints. Runs its own COM apartment, so it is safe from any thread.
+std::vector<AudioEndpoint> listRenderEndpoints();
+
 enum class CaptureSource
 {
     excludeHostProcess,   // everything Windows plays except this process tree (no feedback)
-    wholeDefaultDevice    // classic loopback of the default output, like the original plugin
+    wholeDefaultDevice,   // classic loopback of the default output, like the original plugin
+    selectedEndpoint      // whole-device loopback of one chosen endpoint, REAPER's own output included
 };
 
 class LoopbackCapture
@@ -36,7 +47,10 @@ class LoopbackCapture
 public:
     ~LoopbackCapture() { stop(); }
 
-    void start (int sampleRate, CaptureSource source);
+    // endpointId/endpointName are only used with CaptureSource::selectedEndpoint.
+    // A missing endpoint is reported, never replaced by another device.
+    void start (int sampleRate, CaptureSource source, const std::string& endpointId = {},
+                const std::string& endpointName = {});
     void stop();
     bool isRunning() const { return running.load(); }
     std::string status() const;
@@ -44,10 +58,12 @@ public:
     StereoRing ring;
 
 private:
-    void threadMain (int sampleRate, CaptureSource source);
+    void threadMain (int sampleRate, CaptureSource source, std::string endpointId);
+    void join();
     std::thread thread;
     std::atomic<bool> running { false }, quit { false };
     std::atomic<int> statusCode { 0 };
+    std::string name;
 };
 
 class DeviceRender
@@ -55,14 +71,19 @@ class DeviceRender
 public:
     ~DeviceRender() { stop(); }
 
-    void start (int sampleRate);
+    // An empty endpointId renders to the Windows default device.
+    void start (int sampleRate, const std::string& endpointId = {}, const std::string& endpointName = {});
     void stop();
     bool isRunning() const { return running.load(); }
+    std::string status() const;
 
     StereoRing ring;
 
 private:
-    void threadMain (int sampleRate);
+    void threadMain (int sampleRate, std::string endpointId);
+    void join();
     std::thread thread;
     std::atomic<bool> running { false }, quit { false };
+    std::atomic<int> statusCode { 0 };
+    std::string name;
 };

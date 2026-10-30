@@ -2,3 +2,4 @@ build/
 *.user
 .vs/
 /integrations/voicemeeter/build-x64/
+build-tests/

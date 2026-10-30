@@ -1,16 +1,18 @@
 # System Audio Bridge (enhanced)
 
 A Windows VST3 that captures system audio (YouTube, Spotify, a game, a call) into a REAPER track. It's a
-clean-room reimplementation of the idea behind Bird's freeware *System Audio Bridge*, with two changes:
+clean-room reimplementation of the idea behind Bird's freeware *System Audio Bridge*, with three changes:
 
 1. **Recorded takes play back.** With the transport playing (but not recording), the plugin passes
    the track's own audio through. The original keeps outputting live system audio, so after you
    recorded a take you heard silence instead of it. Set *During playback* to *Keep capturing* if you
    want the original behaviour.
-2. **Send to the default device.** *Send output to default device* plays whatever reaches the plugin
-   on the default Windows output. Put an instance on the master track with capture off and send on
-   to hear the REAPER mix through your normal speakers or headphones, even while REAPER runs on an
-   ASIO interface.
+2. **Send to a Windows device.** *Send output to Windows device* plays whatever reaches the plugin
+   on the default Windows output, or on a device chosen under *Send to*. Put an instance on the master
+   track with capture off and send on to hear the REAPER mix through your normal speakers or
+   headphones, even while REAPER runs on an ASIO interface.
+3. **Choose devices.** *Capture from* and *Send to* pick specific Windows output devices (see
+   [Devices](#devices)).
 
 Capture uses Windows *process-loopback exclusion* (Windows 10 2004 or later). It records everything
 Windows plays **except REAPER itself**, so sending the mix to the same device doesn't feed back. If
@@ -38,12 +40,31 @@ always scans.
 | Capture source | Everything except REAPER | Or *Whole default device* |
 | Capture gain | 0 dB | |
 | Mix track input with capture | off | Off replaces the track input with system audio |
-| Send output to default device | off | Plays the plugin's output on the default Windows device |
+| Send output to Windows device | off | Plays the plugin's output on the *Send to* device |
 | Send only while REAPER is playing | off | When on, the send goes silent while the transport is stopped (still sends while recording) |
 | Send gain | 0 dB | |
 
-The capture and send streams follow the Windows default device that was active when they started.
-Toggle the parameter to pick up a new default device.
+*Capture source* applies only while *Capture from* is set to *Default device*.
+
+## Devices
+
+Below the parameters, two menus choose Windows output devices. Both start on *Default device*, which
+is also what projects saved with 1.0.x load as, so existing projects behave as before.
+
+- **Capture from** - *Default device* uses the *Capture source* parameter (everything except REAPER,
+  or the whole default device). Choosing a device captures a **whole-device loopback** of it: everything
+  playing on that device, including REAPER's own output if REAPER plays there. Process exclusion
+  can't be combined with a chosen device, which is why the menu names it differently.
+- **Send to** - the device the send plays on.
+
+The choice is saved in the project by device ID, with its name. If a chosen device is unplugged or
+disabled, the plugin says so in the status line (*Capture device missing: ...*) and stays silent. It
+never falls back to another device, and it reconnects on its own when the device returns. *Refresh devices*
+re-reads the list after plugging something in. Choosing the same device for capture and send warns
+about feedback.
+
+On *Default device*, a stream uses whichever device was the Windows default when it started. Toggle
+the parameter to pick up a new default (a stream that loses its device reopens the current default).
 
 ## Build
 
