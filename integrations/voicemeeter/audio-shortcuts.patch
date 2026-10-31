@@ -1,13 +1,14 @@
 diff --git a/src/vmchroma/vmchroma.cpp b/src/vmchroma/vmchroma.cpp
-index 5793e71..e4d160b 100644
+index 5793e71..3d1f246 100644
 --- a/src/vmchroma/vmchroma.cpp
 +++ b/src/vmchroma/vmchroma.cpp
-@@ -168,7 +168,11 @@ BOOL WINAPI hk_AppendMenuA(HMENU hMenu, UINT uFlags, UINT_PTR uIDNewItem, LPCSTR
+@@ -168,7 +168,12 @@ BOOL WINAPI hk_AppendMenuA(HMENU hMenu, UINT uFlags, UINT_PTR uIDNewItem, LPCSTR
      {
          o_AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem);
  
 -        return o_AppendMenuA(hMenu, uFlags, 0x1337, VMCHROMA_VERSION);
 +        o_AppendMenuA(hMenu, MF_SEPARATOR, 0, nullptr);
++        o_AppendMenuA(hMenu, MF_STRING, 0x133B, "App Sessions...");
 +        o_AppendMenuA(hMenu, MF_STRING, 0x1338, "Windows Sound Settings");
 +        o_AppendMenuA(hMenu, MF_STRING, 0x1339, "Windows Volume Mixer");
 +        o_AppendMenuA(hMenu, MF_STRING, 0x133A, "Sound Control Panel");
@@ -15,7 +16,7 @@ index 5793e71..e4d160b 100644
      }
  
      // get tray menu handle
-@@ -441,6 +445,34 @@ BOOL WINAPI hk_TrackPopupMenu(HMENU hMenu, UINT uFlags, int x, int y, int nReser
+@@ -441,6 +446,49 @@ BOOL WINAPI hk_TrackPopupMenu(HMENU hMenu, UINT uFlags, int x, int y, int nReser
   */
  LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
  {
@@ -23,9 +24,25 @@ index 5793e71..e4d160b 100644
 +    {
 +        const wchar_t* target = nullptr;
 +        const wchar_t* arguments = nullptr;
++        const wchar_t* failure = L"Windows could not open the selected audio settings.";
 +        wchar_t control_path[MAX_PATH] = {};
 +        switch (LOWORD(wParam))
 +        {
++        case 0x133B:
++        {
++            // vm-sessions.exe ships next to this DLL and runs as its own process.
++            HMODULE self = nullptr;
++            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                                    reinterpret_cast<LPCWSTR>(&hk_WndProc_main), &self)
++                || !GetModuleFileNameW(self, control_path, MAX_PATH))
++                return 0;
++            wchar_t* slash = wcsrchr(control_path, L'\\');
++            if (!slash || wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - control_path), L"vm-sessions.exe") != 0)
++                return 0;
++            target = control_path;
++            failure = L"vm-sessions.exe was not found next to vmchroma64.dll.";
++            break;
++        }
 +        case 0x1338: target = L"ms-settings:sound"; break;
 +        case 0x1339: target = L"ms-settings:apps-volume"; break;
 +        case 0x133A:
@@ -41,8 +58,7 @@ index 5793e71..e4d160b 100644
 +            const auto result = reinterpret_cast<INT_PTR>(
 +                ShellExecuteW(hwnd, L"open", target, arguments, nullptr, SW_SHOWNORMAL));
 +            if (result <= 32)
-+                MessageBoxW(hwnd, L"Windows could not open the selected audio settings.",
-+                            L"Audio Settings", MB_OK | MB_ICONERROR);
++                MessageBoxW(hwnd, failure, L"Audio Settings", MB_OK | MB_ICONERROR);
 +            return 0;
 +        }
 +    }

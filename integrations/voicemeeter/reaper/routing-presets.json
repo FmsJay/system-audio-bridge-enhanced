@@ -1,0 +1,65 @@
+{
+ "_comment": "Shared REAPER <-> Voicemeeter routing presets. Strip indexes are Remote API indexes (0-4 hardware, 5 Voicemeeter Input, 6 AUX, 7 VAIO3). Channels are 1-based on both sides.",
+ "presets": [
+  {
+   "id": "bridge-send-vaio3",
+   "title": "Hear the REAPER mix through Voicemeeter (REAPER on any ASIO device)",
+   "kind": "bridge-send",
+   "endpoint": "Voicemeeter VAIO3 Input",
+   "strip": 7,
+   "hear_on": ["A1"],
+   "reaper": "Audio Bridge on the master track, mode Send REAPER audio, Send to: Voicemeeter VAIO3 Input. Master channels 1-2 go to the plugin.",
+   "voicemeeter": "Strip 8 (VAIO3) channels 1-2 (L/R), routed to A1."
+  },
+  {
+   "id": "bridge-send-aux",
+   "title": "Hear the REAPER mix on the AUX strip (keeps VAIO3 for Windows)",
+   "kind": "bridge-send",
+   "endpoint": "Voicemeeter AUX Input",
+   "strip": 6,
+   "hear_on": ["A1"],
+   "reaper": "Audio Bridge on the master track, mode Send REAPER audio, Send to: Voicemeeter AUX Input. Master channels 1-2.",
+   "voicemeeter": "Strip 7 (AUX) channels 1-2 (L/R), routed to A1."
+  },
+  {
+   "id": "bridge-record-aux",
+   "title": "Record whatever apps play to AUX (e.g. Discord) on a REAPER track",
+   "kind": "bridge-capture",
+   "endpoint": "Voicemeeter AUX Input",
+   "strip": 6,
+   "reaper": "Audio Bridge on the record track, mode Capture system audio, Capture from: Voicemeeter AUX Input (whole device). Track channels 1-2.",
+   "voicemeeter": "Captures the AUX endpoint before the mixer, so strip 7 routing doesn't matter. Don't also send REAPER audio to AUX."
+  },
+  {
+   "id": "wasapi-record-b1-return-aux",
+   "title": "REAPER on WASAPI: record the mic bus B1, return the mix into AUX",
+   "kind": "device",
+   "driver": "WASAPI",
+   "input": "Voicemeeter Out B1",
+   "input_channels": [1, 2],
+   "output": "Voicemeeter AUX Input",
+   "output_channels": [1, 2],
+   "recorded_bus": "B1",
+   "strip": 6,
+   "hear_on": ["A1"],
+   "reaper": "Preferences > Audio > Device: WASAPI, input Voicemeeter Out B1 (channels 1-2), output Voicemeeter AUX Input (channels 1-2). This is the saved WASAPI setup in REAPER.ini.",
+   "voicemeeter": "Strip 7 (AUX) routed to A1 and never to B1, or the return re-enters REAPER's input."
+  },
+  {
+   "id": "insert-stereo-input-1",
+   "title": "Process Stereo Input 1 (mic) in REAPER as a Voicemeeter insert",
+   "kind": "insert",
+   "strip": 0,
+   "reaper": "Preferences > Audio > Device: ASIO, Voicemeeter Potato Insert Virtual ASIO. Record/monitor a track on inputs 1-2, output it to outputs 1-2.",
+   "voicemeeter": "Patch insert channels 1-2 on. While on, Stereo Input 1 only passes audio through REAPER."
+  },
+  {
+   "id": "insert-voicemeeter-input",
+   "title": "Process the Voicemeeter Input strip (strip 6) in REAPER as an insert",
+   "kind": "insert",
+   "strip": 5,
+   "reaper": "Preferences > Audio > Device: ASIO, Voicemeeter Potato Insert Virtual ASIO. Inputs/outputs 11-12 carry strip 6 L/R (11-18 for all 8 channels).",
+   "voicemeeter": "Patch insert channels 11-18 on. While on, strip 6 only passes audio through REAPER."
+  }
+ ]
+}

@@ -2,3 +2,5 @@ build/
 *.user
 .vs/
 /integrations/voicemeeter/build-x64/
+/integrations/voicemeeter/build-tools/
+__pycache__/
