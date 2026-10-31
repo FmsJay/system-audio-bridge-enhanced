@@ -32,6 +32,9 @@ FORMAT = 1
 HOST = socket.gethostname().upper()
 STRIP_FLOATS = ["Gain", "Mute", "Solo", "Mono", "A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3"]
 BUS_FLOATS = ["Gain", "Mute", "Mono"]
+# VAIO extension switches: Strip[n].VAIO feeds "Voicemeeter In n+1" into hardware strip n,
+# Bus[n].VAIO publishes A(n+1) on "Voicemeeter Out A(n+1)". Without the licence they read 0.
+VAIO_SLOTS = [f"Strip[{i}].VAIO" for i in range(5)] + [f"Bus[{i}].VAIO" for i in range(5)]
 HARDWARE = [f"Strip[{i}]" for i in range(5)] + [f"Bus[{i}]" for i in range(5)]
 DEVICE_KINDS = {1: "mme", 3: "wdm", 4: "ks", 5: "asio"}
 
@@ -118,6 +121,8 @@ def read_live():
         for f in BUS_FLOATS:
             params[f"Bus[{i}].{f}"] = get_float(f"Bus[{i}].{f}")
         params[f"Bus[{i}].Label"] = get_string(f"Bus[{i}].Label")
+    for key in VAIO_SLOTS:
+        params[key] = get_float(key)
     devices = {}
     for slot in HARDWARE:
         name = get_string(f"{slot}.device.name")

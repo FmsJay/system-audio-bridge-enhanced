@@ -26,6 +26,8 @@ import Profiles as P  # noqa: E402  (shares its Remote API access and rollback s
 
 BUSES = ["A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3"]
 STRIP_ENDPOINTS = {5: "Voicemeeter Input", 6: "Voicemeeter AUX Input", 7: "Voicemeeter VAIO3 Input"}
+# VAIO extension: "Voicemeeter In n" feeds hardware strip n-1 while that strip's VAIO switch is on.
+STRIP_ENDPOINTS.update({n - 1: f"Voicemeeter In {n}" for n in range(1, 6)})
 INSERT_DRIVER = "Voicemeeter Potato Insert Virtual ASIO"
 REAPER_INI = Path(r"D:\Portable Workstation\DAW\REAPER\REAPER.ini")
 
@@ -91,6 +93,8 @@ def check(preset, device):
         missing = [b for b in preset.get("hear_on", []) if b not in r]
         if missing:
             warnings.append(f"strip {strip + 1} is not routed to {missing}")
+        if strip < 5 and P.get_float(f"Strip[{strip}].VAIO") < 0.5:
+            problems.append(f"strip {strip + 1}'s VAIO switch is off, so {preset.get('endpoint')} doesn't reach it")
         loop_bus = preset.get("recorded_bus") or (live_in[1] if live_in and live_in[0] == "bus" else None)
         if loop_bus and loop_bus in r:
             problems.append(f"FEEDBACK: strip {strip + 1} routes to {loop_bus}, which REAPER records")
@@ -176,6 +180,8 @@ def main():
             changes = []
             if preset["kind"] in ("bridge-send", "device"):
                 strip = preset["strip"]
+                if strip < 5:
+                    changes.append((f"Strip[{strip}].VAIO", 1.0))   # "Voicemeeter In n" -> hardware strip
                 for bus in preset.get("hear_on", []):
                     changes.append((f"Strip[{strip}].{bus}", 1.0))
                 if preset.get("recorded_bus"):

@@ -3,15 +3,18 @@
 The Remote API level meters (VBVMR_GetLevel) read 0 on every channel with the Chroma trial even
 while audio flows, so these checks record the B buses through their "Voicemeeter Out Bn" Windows
 recording endpoints instead. "Voicemeeter Out A1-A5" and "Voicemeeter In 1-5" belong to the
-separately licensed VAIO extension and carry nothing until it is activated, so A buses cannot be
-recorded here.
+separately licensed VAIO extension and carry nothing until it is activated; with it, Strip[n].VAIO
+feeds "Voicemeeter In n+1" into hardware strip n and Bus[n].VAIO publishes bus An on "Out An".
 
-  buses  Record B1-B3 for a second each and report that the engine is delivering audio.
-  proof  Milestone 1 known signal and milestone 4 isolation. Adds A2 and B3 to AUX Input (its
-         existing A1 stays on), plays 700 Hz into "Voicemeeter AUX Input" and 1300 Hz into
-         "Voicemeeter Input" at the same time, and records B3: the AUX tone must arrive and the
-         Voicemeeter Input tone (still A1 only) must not. AUX routing is restored afterwards, even
-         on error. Anything else playing on AUX reaches B3 for those ~2 s too.
+  buses    Record B1-B3 for a second each and report that the engine is delivering audio.
+  proof    Milestone 1 known signal and milestone 4 isolation without the extension. Adds A2 and B3
+           to AUX Input (its A1 stays on), plays 700 Hz into "Voicemeeter AUX Input" and 1300 Hz
+           into "Voicemeeter Input" together, and records B3: the AUX tone must arrive and the
+           Voicemeeter Input tone (still A1 only) must not.
+  proof-a  The same on hardware buses, with the extension: feeds "Voicemeeter In 4" into the idle
+           Stereo Input 4 and routes it first to A1, then to A3 only, while "Voicemeeter Input"
+           stays on A1. Out A1 and Out A3 are recorded at the same time in each pass.
+Everything changed is restored afterwards, even on error.
 """
 import argparse
 import ctypes
@@ -122,8 +125,76 @@ def run_proof(dbfs):
     return summary
 
 
+def meters_together(endpoints, seconds, *freqs):
+    """Record several endpoints over the same window."""
+    procs = {e: subprocess.Popen([str(VMTONE), "--meter", e, str(seconds), *map(str, freqs)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) for e in endpoints}
+    result = {}
+    for e, p in procs.items():
+        text = p.communicate(timeout=60)[0]
+        result[e] = {int(float(h)): float(v) for h, v in re.findall(r"hz ([\d.]+): (-?[\d.]+) dBFS", text)}
+    return result
+
+
+def run_proof_a(dbfs):
+    strip, in_ep, other_ep = 3, "Voicemeeter In 4", OTHER_ENDPOINT
+    out_a1, out_a3 = "Voicemeeter Out A1", "Voicemeeter Out A3"
+    keys = [f"Strip[{strip}].{k}" for k in BUSES + ["VAIO", "Mute", "Gain"]] + ["Bus[0].VAIO", "Bus[2].VAIO"]
+    saved = {k: get(k) for k in keys}
+    other = routes(OTHER_STRIP)
+    print(f"Voicemeeter Input routes: {other}")
+    if "A1" not in other or "A3" in other:
+        raise RuntimeError("Needs Voicemeeter Input on A1 and off A3; routing differs.")
+    passes = {}
+    try:
+        for k in ("Bus[0].VAIO", "Bus[2].VAIO", f"Strip[{strip}].VAIO"):
+            set_param(k, 1.0)
+        set_param(f"Strip[{strip}].Mute", 0.0)
+        set_param(f"Strip[{strip}].Gain", 0.0)
+        for target in ("A1", "A3"):
+            for b in BUSES:
+                set_param(f"Strip[{strip}].{b}", 1.0 if b == target else 0.0)
+            time.sleep(0.8)
+            if get(f"Strip[{strip}].VAIO") < 0.5:
+                raise RuntimeError("Strip VAIO was refused: the VAIO extension licence is not active.")
+            players = [subprocess.Popen([str(VMTONE), ep, str(dbfs), "1.8", str(hz)], stdout=subprocess.DEVNULL)
+                       for ep, hz in ((in_ep, 700), (other_ep, 1300))]
+            time.sleep(0.5)
+            passes[f"In 4 -> {target}"] = meters_together([out_a1, out_a3], 0.8, 700, 1300)
+            for p in players:
+                p.wait(timeout=30)
+    finally:
+        for k, v in saved.items():
+            set_param(k, v)
+        time.sleep(0.8)
+        restored = {k: get(k) for k in keys} == saved
+
+    # Out An is post-fader, so a tone should arrive at its level plus that bus's fader, within 4 dB.
+    fader = {out_a1: get("Bus[0].Gain"), out_a3: get("Bus[2].Gain")}
+
+    def present(db, out):
+        return abs(db - (dbfs + fader[out])) < 4
+
+    def absent(db):
+        return db < -70
+
+    a1, a3 = passes["In 4 -> A1"], passes["In 4 -> A3"]
+    checks = {
+        "In 4 on A1 reaches Out A1": present(a1[out_a1][700], out_a1),
+        "In 4 on A1 not on Out A3": absent(a1[out_a3][700]),
+        "In 4 on A3 reaches Out A3": present(a3[out_a3][700], out_a3),
+        "In 4 on A3 leaves Out A1": absent(a3[out_a1][700]),
+        "Voicemeeter Input stays on Out A1": present(a1[out_a1][1300], out_a1) and present(a3[out_a1][1300], out_a1),
+        "Voicemeeter Input never on Out A3": absent(a1[out_a3][1300]) and absent(a3[out_a3][1300]),
+        "restored": restored,
+    }
+    summary = {"bus_faders_db": fader, "levels_db": passes, "checks": checks, "pass": all(checks.values())}
+    print(json.dumps(summary, indent=1))
+    return summary
+
+
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("mode", choices=["buses", "proof"])
+parser.add_argument("mode", choices=["buses", "proof", "proof-a"])
 parser.add_argument("--dbfs", type=float, default=-40.0)
 parser.add_argument("--json", type=Path, help="Also save the result here (outside the repository).")
 args = parser.parse_args()
@@ -133,7 +204,7 @@ if remote.VBVMR_Login() != 0:
     sys.exit("A running Voicemeeter mixer is required.")
 try:
     time.sleep(0.5)
-    result = run_buses() if args.mode == "buses" else run_proof(args.dbfs)
+    result = {"buses": run_buses, "proof": lambda: run_proof(args.dbfs), "proof-a": lambda: run_proof_a(args.dbfs)}[args.mode]()
     if args.json:
         args.json.write_text(json.dumps(result, indent=1))
 finally:

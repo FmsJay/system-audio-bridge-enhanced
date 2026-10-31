@@ -57,8 +57,16 @@ Real-pointer test (desktop control, real mouse input, on Stereo Input 4, every v
 - Deploy-Trial.ps1 had stopped the mixer and then failed to replace a vm-sessions.exe locked by an open panel, which left the mixer down for about 30 s until restarted by hand. It now closes the panel first and restarts the mixer in a finally block. Rerun with the panel open: clean.
 - Active trial DLL SHA256 566FC20F6554C44BF10D0571CC6CDD7AF9130F91BFDBF7208EC73031A23452E3. Mixed DPI (the mixer moved to the second monitor at a different scaling) was not tested.
 
-Still open, and why:
-- Native settings Load (Command.Load) is still untested and needs an isolated Windows environment. Profiles.py avoids needing it.
-- VAIO extension (In 1-5 as extra endpoints, a "VAIO 4" style strip, Out A1-A5 recording) needs the licence; then rerun Signal-Check.py with an A-bus meter.
-- A2 audible check needs the A50 connected.
-- Milestone 5 with the plugins the user actually plans to host: Measure-FX.py --fx "<name>" ...
+## VAIO extension activated, native Load verified (2026-10-30, later)
+
+The user bought and activated the Potato VAIO extension licence. Strip[n].VAIO now stays on, and "Voicemeeter In n+1" feeds hardware strip n. Bus[n].VAIO publishes A(n+1) post-fader on "Voicemeeter Out A(n+1)". Both are off on this machine except while a test runs.
+- Milestone 4 on hardware buses (Signal-Check.py proof-a): passed. Using A1 instead of A2, since there is no A50. Stereo Input 4 was fed from "Voicemeeter In 4", 700 Hz at -45 dBFS. Routed to A1 it reached Out A1 at -54.7 dB (A1 fader -9.25 dB) and not Out A3. Routed to A3 it reached Out A3 at -42.8 dB (A3 fader +2.75 dB) and left A1 (-122 dB). The 1300 Hz tone on Voicemeeter Input stayed on Out A1 (-55 dB) and never reached Out A3 (below -100 dB). All switches and routes were restored.
+- Endpoint budget with the extension: three virtual inputs (Voicemeeter Input / AUX / VAIO3 = strips 6-8) plus In 1-5 into hardware strips 1-5. Strips 1-3 have hardware inputs, so In 4 and In 5 (strips 4-5) are the two extra independent Windows endpoints that displace nothing, routable to any of A1-A5/B1-B3. They are the "VAIO 4" substitute; Potato has no fourth virtual strip. A2/A4/A5 currently have no device (A50 and RTK HDR absent).
+- Native-Settings.py test: passed. Steps: export (137,057 bytes), mark Stereo Input 4 (-6 dB, A3, label LoadTest), Command.Load the export. Result: the mark was gone and routing/levels/labels/devices equalled the export. A re-export was identical line for line (0 differing lines), so the duplicated opening tag found by the audit does not stop Potato loading its own files. Load restarts the engine for a moment. Do not log in to the Remote API again while logged in; load() now only refreshes. Test exports are in D:\Agent Workspace\VoicemeeterMod\restore-test-20261030b (private, outside Git).
+- Profiles.py saves and applies Strip/Bus VAIO switches. Reaper-Routing.py maps "Voicemeeter In n" to hardware strip n-1, checks the strip's VAIO switch, and has a new bridge-send-in4 preset: REAPER mix on its own strip, Stereo Input 4, leaving AUX and VAIO3 to Windows. Its check reports what is needed (VAIO on, A1 route); it was previewed, not applied.
+- The tools are registered in the workstation brain (brain_mcp register_tool) and appear in CLAUDE.md on both PCs.
+
+Still open:
+- Mixed DPI (the mixer on the second monitor at a different scaling): the user accepted it as is.
+- Milestone 5 with real plugins: the user will test through the Audio Bridge (Measure-FX.py --fx "<name>").
+- Audio Bridge 1.1.0 REAPER checks and release: the user will test later.

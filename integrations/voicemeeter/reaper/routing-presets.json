@@ -22,6 +22,16 @@
    "voicemeeter": "Strip 7 (AUX) channels 1-2 (L/R), routed to A1."
   },
   {
+   "id": "bridge-send-in4",
+   "title": "Hear the REAPER mix on its own strip, Stereo Input 4 (VAIO extension)",
+   "kind": "bridge-send",
+   "endpoint": "Voicemeeter In 4",
+   "strip": 3,
+   "hear_on": ["A1"],
+   "reaper": "Audio Bridge on the master track, mode Send REAPER audio, Send to: Voicemeeter In 4. Master channels 1-2.",
+   "voicemeeter": "Stereo Input 4 channels 1-2 (L/R), VAIO switch on, routed to A1. Leaves AUX and VAIO3 free for Windows apps."
+  },
+  {
    "id": "bridge-record-aux",
    "title": "Record whatever apps play to AUX (e.g. Discord) on a REAPER track",
    "kind": "bridge-capture",
