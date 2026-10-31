@@ -66,6 +66,8 @@ The user bought and activated the Potato VAIO extension licence. Strip[n].VAIO n
 - Profiles.py saves and applies Strip/Bus VAIO switches. Reaper-Routing.py maps "Voicemeeter In n" to hardware strip n-1, checks the strip's VAIO switch, and has a new bridge-send-in4 preset: REAPER mix on its own strip, Stereo Input 4, leaving AUX and VAIO3 to Windows. Its check reports what is needed (VAIO on, A1 route); it was previewed, not applied.
 - The tools are registered in the workstation brain (brain_mcp register_tool) and appear in CLAUDE.md on both PCs.
 
+Shortcuts (at the user's request): the taskbar pin, the Start menu "Voicemeeter Potato x64" (ProgramData) and the Startup "Voicemeeter (VB-Audio)" entry now launch runtime-trial\voicemeeter8x64_vmchroma.exe, with the working directory C:\Program Files (x86)\VB\Voicemeeter and the stock icon. The duplicate Startup entry "voicemeeter8x64.exe - Shortcut" was moved out. The originals, with their locations, are in D:\Agent Workspace\VoicemeeterMod\shortcut-backup-20261030; copy them back to undo. These shortcuts bypass Start-PotatoMod.ps1's hash check. A Voicemeeter reinstall or update may reset the Start menu entry.
+
 Still open:
 - Mixed DPI (the mixer on the second monitor at a different scaling): the user accepted it as is.
 - Milestone 5 with real plugins: the user will test through the Audio Bridge (Measure-FX.py --fx "<name>").
