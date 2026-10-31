@@ -25,6 +25,12 @@ if ($Rollback) {
 }
 
 $before = Join-Path $env:TEMP 'vmchroma-before.json'
+# An open App Sessions panel locks vm-sessions.exe; close it before anything is stopped.
+$panelPath = Join-Path $Trial 'vm-sessions.exe'
+foreach ($panel in @(Get-Process -Name vm-sessions -ErrorAction SilentlyContinue | Where-Object Path -eq $panelPath)) {
+    [void]$panel.CloseMainWindow()
+    if (!$panel.WaitForExit(5000)) { throw 'Close the App Sessions panel first; nothing was stopped.' }
+}
 $running = Get-Process -Name voicemeeter8x64_vmchroma -ErrorAction SilentlyContinue
 if ($running) {
     if ($running.Path -ne $exe) { throw "Running Chroma is not the workspace trial ($($running.Path))." }
@@ -34,15 +40,18 @@ if ($running) {
     if (!$running.WaitForExit(20000)) { throw 'Mixer did not shut down within 20 s; nothing was replaced.' }
 }
 
-if ($Rollback) {
-    Copy-Item -LiteralPath $saved -Destination $dll -Force
-} else {
-    Copy-Item -LiteralPath $dll -Destination $saved -Force
-    Copy-Item -LiteralPath $newDll -Destination $dll -Force
-    Copy-Item -LiteralPath $newPanel -Destination (Join-Path $Trial 'vm-sessions.exe') -Force
+try {
+    if ($Rollback) {
+        Copy-Item -LiteralPath $saved -Destination $dll -Force
+    } else {
+        Copy-Item -LiteralPath $dll -Destination $saved -Force
+        Copy-Item -LiteralPath $newDll -Destination $dll -Force
+        Copy-Item -LiteralPath $newPanel -Destination $panelPath -Force
+    }
+} finally {
+    # Whatever happened above, never leave the user without a mixer.
+    $proc = Start-Process -FilePath $exe -WorkingDirectory $install -PassThru
 }
-
-$proc = Start-Process -FilePath $exe -WorkingDirectory $install -PassThru
 Start-Sleep -Seconds 6
 $loaded = (Get-Process -Id $proc.Id).Modules | Where-Object ModuleName -eq 'vmchroma64.dll' | Select-Object -First 1
 if (!$loaded -or $loaded.FileName -ne $dll) { throw "vmchroma64.dll from the trial is not loaded (got '$($loaded.FileName)')." }

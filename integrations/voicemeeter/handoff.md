@@ -50,8 +50,14 @@ Tools (tools\Build-Tools.ps1 builds the native ones into build-tools\Release, wh
 - Reaper-Routing.py + reaper\routing-presets.json (milestone 3): reads REAPER's live device through reaper\AudioDevice-Info.lua (reaper.exe -nonewinst). It checks record/return, Audio Bridge and insert presets with explicit channels against live routing. FEEDBACK means a return strip routes to the bus REAPER records, or a capture records REAPER's own output. Apply sets only the Voicemeeter side, after a rollback snapshot, and refuses to enable an insert unless REAPER is on the Voicemeeter Potato Insert Virtual ASIO. The insert map is 34 channels (PatchInsert c1-c34): hardware strip n is 2n-1..2n, virtual strips 11-18, 19-26, 27-34. Test-Routing.py: all checks pass.
 - Measure-FX.py + reaper\Measure-FX.lua (milestone 5): in a temporary REAPER tab with a silent track, steps N plugin instances through dry, on, bypassed, on, offline while playing (dry recovery) and back online. Reports REAPER process CPU, audio/media xruns, output latency and the chain PDC per phase, then closes the tab and reselects the user's tab. Baseline with 24 stock Cockos FX: 0 xruns in every phase, 5.51 ms output latency, PDC 0. CPU stayed in the 5-26 % range of one core, dominated by REAPER itself.
 
+Real-pointer test (desktop control, real mouse input, on Stereo Input 4, every value read back through the Remote API and reset):
+- 100 % (1645x770): fader drag 0 -> -20.1 dB, Comp dial drag 0 -> 4.0, B3 click 0 -> 1, VBAN button opened "VB-Audio Network Configuration", which closed from its own close button.
+- 90 % reached by dragging the resize corner (1482x694): fader -> -20.5 dB, Comp -> 4.0, B3 -> 1, VBAN dialog opened and closed. 75 % after a programmatic resize: B3 click hit.
+- Bug found and fixed: resizes that skip WM_SIZING (Windows Snap, SetWindowPos from another tool) left Potato's child windows (app list, recorder, EQ panels) at their old positions, drawn over the scaled layout. The WM_SIZE hook now calls resize_child_windows() unless minimized (in audio-shortcuts.patch). Verified at 75 %.
+- Deploy-Trial.ps1 had stopped the mixer and then failed to replace a vm-sessions.exe locked by an open panel, which left the mixer down for about 30 s until restarted by hand. It now closes the panel first and restarts the mixer in a finally block. Rerun with the panel open: clean.
+- Active trial DLL SHA256 566FC20F6554C44BF10D0571CC6CDD7AF9130F91BFDBF7208EC73031A23452E3. Mixed DPI (the mixer moved to the second monitor at a different scaling) was not tested.
+
 Still open, and why:
-- Physical-mouse and mixed-DPI pointer test: computer control was held by another session. Steps: at 100 % and 90 % window size, drag Stereo Input 4's fader and Comp dial, click its B3 route and the VBAN button. Read each change via the Remote API, then restore.
 - Native settings Load (Command.Load) is still untested and needs an isolated Windows environment. Profiles.py avoids needing it.
 - VAIO extension (In 1-5 as extra endpoints, a "VAIO 4" style strip, Out A1-A5 recording) needs the licence; then rerun Signal-Check.py with an A-bus meter.
 - A2 audible check needs the A50 connected.

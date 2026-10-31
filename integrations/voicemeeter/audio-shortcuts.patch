@@ -1,5 +1,5 @@
 diff --git a/src/vmchroma/vmchroma.cpp b/src/vmchroma/vmchroma.cpp
-index 5793e71..3d1f246 100644
+index 5793e71..2a16595 100644
 --- a/src/vmchroma/vmchroma.cpp
 +++ b/src/vmchroma/vmchroma.cpp
 @@ -168,7 +168,12 @@ BOOL WINAPI hk_AppendMenuA(HMENU hMenu, UINT uFlags, UINT_PTR uIDNewItem, LPCSTR
@@ -65,4 +65,19 @@ index 5793e71..3d1f246 100644
 +
      if (msg == WM_COMMAND && LOWORD(wParam) == 0x1337)
          ShellExecuteW(nullptr, L"open", L"https://github.com/emkaix/voicemeeter-chroma", nullptr, nullptr, SW_SHOW);
+ 
+@@ -623,6 +671,14 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
+ 
+         wm->set_cur_main_wnd_size(LOWORD(lParam), HIWORD(lParam));
+ 
++        // Resizes that skip WM_SIZING (Snap, SetWindowPos from other tools) must move the
++        // child windows too, or they stay at their old positions over the scaled layout.
++        if (wParam != SIZE_MINIMIZED && LOWORD(lParam) > 0 && HIWORD(lParam) > 0)
++        {
++            wm->resize_child_windows();
++            SendMessageA(hwnd, WM_TIMER, 12346, 0);
++        }
++
+         return o_WndProc_main(hwnd, msg, wParam, lParam);
+     }
  
