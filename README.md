@@ -59,7 +59,9 @@ is also what projects saved with 1.0.x load as, so existing projects behave as b
 
 The choice is saved in the project by device ID, with its name. If a chosen device is unplugged or
 disabled, the plugin says so in the status line (*Capture device missing: ...*) and stays silent. It
-never falls back to another device, and it reconnects on its own when the device returns. *Refresh devices*
+never falls back to another device, and it reconnects on its own when the device returns. A device another
+app holds in exclusive mode (for example a Voicemeeter hardware output) shows *... device in use* and is
+retried the same way until it is released. *Refresh devices*
 re-reads the list after plugging something in. Choosing the same device for capture and send warns
 about feedback.
 

@@ -250,22 +250,32 @@ IAudioClient* activateRenderDevice (const std::wstring& endpointId, Activation& 
 }
 
 // Try float first, then 16-bit; AUTOCONVERTPCM lets Windows resample to the host rate.
-bool initialise (IAudioClient* client, DWORD extraFlags, int sampleRate, bool& isFloat)
+// Returns the last Initialize result, so callers can tell a device held in exclusive mode apart.
+HRESULT initialise (IAudioClient* client, DWORD extraFlags, int sampleRate, bool& isFloat)
 {
     const DWORD flags = extraFlags | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
                         | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
     const REFERENCE_TIME bufferDuration = 200000; // 20 ms
+    HRESULT hr = E_FAIL;
 
     for (bool tryFloat : { true, false })
     {
         auto fmt = makeFormat (sampleRate, tryFloat);
-        if (SUCCEEDED (client->Initialize (AUDCLNT_SHAREMODE_SHARED, flags, bufferDuration, 0, &fmt, nullptr)))
+        hr = client->Initialize (AUDCLNT_SHAREMODE_SHARED, flags, bufferDuration, 0, &fmt, nullptr);
+        if (SUCCEEDED (hr))
         {
             isFloat = tryFloat;
-            return true;
+            break;
         }
     }
-    return false;
+    return hr;
+}
+
+// Status for a stream that didn't start: missing endpoint, exclusive-mode owner, or anything else.
+int failureCode (Activation activation, HRESULT initResult)
+{
+    if (activation == Activation::missing) return -2;
+    return initResult == AUDCLNT_E_DEVICE_IN_USE ? -4 : -1;
 }
 
 struct ComScope
@@ -379,6 +389,7 @@ std::string LoopbackCapture::status() const
         case -1: return "Capture failed to start";
         case -2: return named ("Capture device missing", name) + " - reconnect it or choose another";
         case -3: return named ("Capture device lost", name) + " - retrying";
+        case -4: return named ("Capture device in use", name) + " - another app holds it in exclusive mode";
         default: return "Idle";
     }
 }
@@ -392,11 +403,12 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source, std::str
     bool isFloat = true;
     int code = 0;
     auto activation = Activation::failed;
+    HRESULT initResult = E_FAIL;
 
     if (source == CaptureSource::excludeHostProcess)
     {
         client = activateProcessLoopbackExcluding (GetCurrentProcessId());
-        if (client && initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat))
+        if (client && SUCCEEDED (initResult = initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat)))
             code = 1;
         else
             safeRelease (client);
@@ -405,7 +417,7 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source, std::str
     if (source == CaptureSource::selectedEndpoint)
     {
         client = activateRenderDevice (toWide (endpointId), activation);
-        if (client && initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat))
+        if (client && SUCCEEDED (initResult = initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat)))
             code = 4;
         else
             safeRelease (client);
@@ -413,7 +425,7 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source, std::str
     else if (code == 0)
     {
         client = activateRenderDevice ({}, activation);
-        if (client && initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat))
+        if (client && SUCCEEDED (initResult = initialise (client, AUDCLNT_STREAMFLAGS_LOOPBACK, sampleRate, isFloat)))
             code = source == CaptureSource::excludeHostProcess ? 3 : 2;
         else
             safeRelease (client);
@@ -427,7 +439,7 @@ void LoopbackCapture::threadMain (int sampleRate, CaptureSource source, std::str
         || FAILED (client->GetService (IID_PPV_ARGS (&capture)))
         || FAILED (client->Start()))
     {
-        statusCode = activation == Activation::missing ? -2 : -1;
+        statusCode = failureCode (activation, initResult);
         safeRelease (capture);
         safeRelease (client);
         CloseHandle (event);
@@ -522,6 +534,7 @@ std::string DeviceRender::status() const
         case -1: return "Send failed to start";
         case -2: return named ("Send device missing", name) + " - reconnect it or choose another";
         case -3: return named ("Send device lost", name) + " - retrying";
+        case -4: return named ("Send device in use", name) + " - another app holds it in exclusive mode";
         default: return "Send idle";
     }
 }
@@ -537,14 +550,15 @@ void DeviceRender::threadMain (int sampleRate, std::string endpointId)
     IAudioRenderClient* render = nullptr;
     HANDLE event = CreateEventW (nullptr, FALSE, FALSE, nullptr);
     UINT32 bufferFrames = 0;
+    HRESULT initResult = E_FAIL;
 
     if (client == nullptr
-        || ! initialise (client, 0, sampleRate, isFloat)
+        || FAILED (initResult = initialise (client, 0, sampleRate, isFloat))
         || FAILED (client->SetEventHandle (event))
         || FAILED (client->GetBufferSize (&bufferFrames))
         || FAILED (client->GetService (IID_PPV_ARGS (&render))))
     {
-        statusCode = activation == Activation::missing ? -2 : -1;
+        statusCode = failureCode (activation, initResult);
         safeRelease (render);
         safeRelease (client);
         CloseHandle (event);
