@@ -116,46 +116,77 @@ int main (int argc, char** argv)
         p.params.getParameter ("capture")->setValueNotifyingHost (0.0f);
         T::tick (p);
         CHECK (logHas ("render stop") && logHas ("capture stop"));
-        CHECK (p.statusText().contains ("Capture off") && p.statusText().contains ("Send off"));
+        CHECK (p.statusText().startsWith ("Off"));
         p.releaseResources();
     }
 
-    // The editor builds, lists devices and shows a missing selection by name.
+    // The editor: exclusive mode buttons, one section at a time, the source folded into the
+    // capture menu, a missing selection shown by name, and a tooltip on every control.
     {
         BridgeProcessor p; T::stopTimer (p);
         p.setSendEndpoint ({ "{dev-gone}", "Old Interface" });
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
-        bool sawMissing = false, sawDefault = false;
-        std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
-        {
-            if (auto* box = dynamic_cast<juce::ComboBox*> (&c))
-            {
-                if (box->getText() == "Missing: Old Interface") sawMissing = true;
-                if (box->getText() == "Default device (see Capture source)") sawDefault = true;
-            }
-            for (auto* child : c.getChildren()) walk (*child);
-        };
-        walk (*ed);
-        CHECK (sawMissing);
-        CHECK (sawDefault);
-        CHECK (ed->getHeight() > 100);
+        auto find = [&] (const juce::String& id) { return ed->findChildWithID (id); };
+        auto* captureMode = dynamic_cast<juce::Button*> (find ("captureMode"));
+        auto* sendMode = dynamic_cast<juce::Button*> (find ("sendMode"));
+        auto* captureBox = dynamic_cast<juce::ComboBox*> (find ("captureBox"));
+        auto* sendBox = dynamic_cast<juce::ComboBox*> (find ("sendBox"));
+        CHECK (captureMode && sendMode && captureBox && sendBox);
+        auto on = [&] (const char* id) { return p.params.getRawParameterValue (id)->load() > 0.5f; };
 
+        CHECK (captureMode->getToggleState() && ! sendMode->getToggleState());   // default: capture
+        CHECK (captureBox->isVisible() && ! sendBox->isVisible());
+        CHECK (captureBox->getText() == "Everything except REAPER");
+
+        sendMode->onClick();
+        CHECK (on ("send") && ! on ("capture"));
+        CHECK (sendBox->isVisible() && ! captureBox->isVisible());
+        CHECK (sendBox->getText() == "Missing: Old Interface");
+
+        captureMode->onClick();
+        CHECK (on ("capture") && ! on ("send"));
+        CHECK (captureBox->isVisible() && ! sendBox->isVisible());
+
+        captureBox->setSelectedId (2, juce::sendNotificationSync);               // Whole default device
+        CHECK ((int) T::sourceIndex (p) == 1 && p.getCaptureEndpoint().id.isEmpty());
+        captureBox->setSelectedId (10, juce::sendNotificationSync);              // first listed device
+        CHECK (p.getCaptureEndpoint().id == "{dev-A}" && (int) T::sourceIndex (p) == 1);
+        captureBox->setSelectedId (1, juce::sendNotificationSync);               // back to Everything except REAPER
+        CHECK ((int) T::sourceIndex (p) == 0 && p.getCaptureEndpoint().id.isEmpty());
+
+        bool allTipped = true;
+        for (auto* c : ed->getChildren())
+            if (auto* t = dynamic_cast<juce::SettableTooltipClient*> (c))
+                if (t->getTooltip().isEmpty() && ! c->getComponentID().startsWith ("juce"))
+                {
+                    std::cout << "  no tooltip: " << c->getName() << " " << c->getComponentID() << "\n";
+                    allTipped = false;
+                }
+        CHECK (allTipped);
     }
 
-    if (argc > 1) // renders the editor with one chosen and one missing device, to check the layout
+    if (argc > 1) // renders both modes, with a chosen capture device and a missing send device
     {
         BridgeProcessor p; T::stopTimer (p);
         p.setSendEndpoint ({ "{dev-gone}", "Old Interface" });
         p.prepareToPlay (48000, 512);
-        p.params.getParameter ("send")->setValueNotifyingHost (1.0f);
         p.setCaptureEndpoint ({ "{dev-A}", "Speakers A" });
         T::tick (p);
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
-        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.5f);
-        juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argc > 1 ? argv[1] : "editor.png"));
-        out.deleteFile();
-        juce::FileOutputStream os (out);
-        juce::PNGImageFormat().writeImageToStream (img, os);
+        juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]));
+
+        auto snap = [&] (const juce::File& f)
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.5f);
+            f.deleteFile();
+            juce::FileOutputStream os (f);
+            juce::PNGImageFormat().writeImageToStream (img, os);
+        };
+        snap (out);
+        dynamic_cast<juce::Button*> (ed->findChildWithID ("sendMode"))->onClick();
+        T::tick (p);
+        ed.reset (p.createEditor());   // fresh status line; the editor's own timer doesn't run here
+        snap (out.getSiblingFile (out.getFileNameWithoutExtension() + "-send.png"));
         p.releaseResources();
     }
 

@@ -15,41 +15,87 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout()
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "captureGain", 1 }, "Capture gain",
         NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "passInput", 1 }, "Mix track input with capture", false));
-    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "send", 1 }, "Send output to Windows device", false));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "send", 1 }, "Send REAPER audio", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "sendOnlyPlaying", 1 }, "Send only while REAPER is playing", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "sendGain", 1 }, "Send gain",
         NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
     return layout;
 }
 
+// One mode at a time: capture system audio into the track, or send the track's audio to a Windows
+// device. The mode is the "capture" and "send" parameters set exclusively, so 1.0.x projects and
+// automation keep working. The Capture source parameter is folded into the Capture from menu.
 class BridgeEditor final : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
-    explicit BridgeEditor (BridgeProcessor& p) : AudioProcessorEditor (p), proc (p), generic (p)
+    explicit BridgeEditor (BridgeProcessor& p) : AudioProcessorEditor (p), proc (p)
     {
-        addAndMakeVisible (generic);
-        addAndMakeVisible (status);
-        status.setJustificationType (juce::Justification::centredLeft);
-        status.setMinimumHorizontalScale (0.7f);
+        captureMode.setComponentID ("captureMode");
+        sendMode.setComponentID ("sendMode");
+        captureBox.setComponentID ("captureBox");
+        sendBox.setComponentID ("sendBox");
 
-        for (auto* l : { &captureLabel, &sendLabel })
+        captureMode.setConnectedEdges (juce::Button::ConnectedOnRight);
+        sendMode.setConnectedEdges (juce::Button::ConnectedOnLeft);
+        for (auto* b : { &captureMode, &sendMode })
         {
-            l->setJustificationType (juce::Justification::centredRight);
-            addAndMakeVisible (*l);
+            b->setColour (juce::TextButton::buttonOnColourId, getLookAndFeel().findColour (juce::Slider::thumbColourId));
+            b->setColour (juce::TextButton::textColourOnId, juce::Colours::white);
         }
-        for (auto* b : { &captureBox, &sendBox })
-            addAndMakeVisible (*b);
-        addAndMakeVisible (refresh);
-
-        captureBox.onChange = [this] { choose (captureBox, true); };
-        sendBox.onChange    = [this] { choose (sendBox, false); };
+        captureMode.onClick = [this] { setMode (false); };
+        sendMode.onClick    = [this] { setMode (true); };
+        captureBox.onChange = [this] { chooseCapture(); };
+        sendBox.onChange    = [this] { chooseSend(); };
         refresh.onClick     = [this] { rescan(); };
-        captureBox.setTooltip ("Default follows the Capture source parameter. A chosen device is captured as a "
-                               "whole-device loopback, which includes anything REAPER plays to it.");
-        sendBox.setTooltip ("Windows device the send plays on. A chosen device that disappears is reported, "
-                            "never replaced by another one.");
 
-        setSize (480, generic.getHeight() + 3 * rowHeight + 48);
+        const auto& choices = dynamic_cast<juce::AudioParameterChoice&> (*p.params.getParameter ("playbackMode")).choices;
+        playbackBox.addItemList (choices, 1);
+
+        for (auto* s : { &captureGain, &sendGain })
+        {
+            s->setSliderStyle (juce::Slider::LinearHorizontal);
+            s->setTextBoxStyle (juce::Slider::TextBoxRight, false, 72, 22);
+            s->setTextValueSuffix (" dB");
+        }
+
+        tip ({ &captureMode }, "Record system audio (YouTube, Spotify, a call...) into this track.");
+        tip ({ &sendMode }, "Play this track's audio on a Windows output device, e.g. to hear the REAPER mix "
+                            "on your normal speakers while REAPER runs on ASIO. Put it on the master track.");
+        tip ({ &captureFromLabel, &captureBox },
+             "Everything except REAPER: whatever Windows plays, minus REAPER, so there is no feedback.\n"
+             "Whole default device: everything on the default output, REAPER included.\n"
+             "A named device: everything playing on that device, REAPER included. If it is unplugged "
+             "the plugin goes silent and waits for it; it never switches device.");
+        tip ({ &sendToLabel, &sendBox }, "Windows output device to play on. Default device follows Windows' "
+                                         "default when the send starts. A named device that disappears is "
+                                         "reported and waited for, never replaced.");
+        tip ({ &refresh }, "Re-read the Windows device list, e.g. after plugging something in.");
+        tip ({ &playbackLabel, &playbackBox }, "While REAPER plays back (not recording): play the track's recorded "
+                                               "takes, or keep monitoring live system audio like the original plugin.");
+        tip ({ &captureGainLabel, &captureGain }, "Level of the captured system audio.");
+        tip ({ &passInput }, "Off: system audio replaces the track input. On: both are mixed.");
+        tip ({ &sendGainLabel, &sendGain }, "Level sent to the Windows device. The track output is unchanged.");
+        tip ({ &onlyPlaying }, "Silence the send while the transport is stopped. It still sends while recording.");
+        tip ({ &status }, "What the plugin is doing right now.");
+
+        status.setJustificationType (juce::Justification::centredLeft);
+        status.setMinimumHorizontalScale (0.8f);
+        status.setFont (juce::FontOptions (13.0f));
+        for (auto* l : { &captureFromLabel, &sendToLabel, &playbackLabel, &captureGainLabel, &sendGainLabel })
+            l->setJustificationType (juce::Justification::centredLeft);
+
+        for (auto* c : std::initializer_list<juce::Component*> { &captureMode, &sendMode, &refresh, &status })
+            addAndMakeVisible (c);
+        for (auto* c : captureSection) addChildComponent (c);
+        for (auto* c : sendSection) addChildComponent (c);
+
+        playbackAttachment = std::make_unique<ComboAttachment> (p.params, "playbackMode", playbackBox);
+        captureGainAttachment = std::make_unique<SliderAttachment> (p.params, "captureGain", captureGain);
+        sendGainAttachment = std::make_unique<SliderAttachment> (p.params, "sendGain", sendGain);
+        passInputAttachment = std::make_unique<ButtonAttachment> (p.params, "passInput", passInput);
+        onlyPlayingAttachment = std::make_unique<ButtonAttachment> (p.params, "sendOnlyPlaying", onlyPlaying);
+
+        setSize (460, 262);
         rescan();
         startTimerHz (4);
         timerCallback();
@@ -57,35 +103,101 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+        const auto bg = getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId);
+        g.fillAll (bg);
+        g.setColour (bg.brighter (0.12f));
+        g.fillRoundedRectangle (panel.toFloat(), 6.0f);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds();
-        status.setBounds (r.removeFromBottom (48).reduced (8, 4));
+        auto r = getLocalBounds().reduced (12);
+        auto modes = r.removeFromTop (32);
+        captureMode.setBounds (modes.removeFromLeft (modes.getWidth() / 2));
+        sendMode.setBounds (modes);
 
-        auto devices = r.removeFromBottom (3 * rowHeight).reduced (8, 2);
-        auto row = [&devices] { return devices.removeFromTop (rowHeight).reduced (0, 2); };
+        r.removeFromTop (10);
+        status.setBounds (r.removeFromBottom (40));
+        r.removeFromBottom (8);
+        panel = r;
 
-        auto c = row();
-        captureLabel.setBounds (c.removeFromLeft (labelWidth));
-        captureBox.setBounds (c.withTrimmedLeft (6));
-        auto s = row();
-        sendLabel.setBounds (s.removeFromLeft (labelWidth));
-        sendBox.setBounds (s.withTrimmedLeft (6));
-        refresh.setBounds (row().removeFromRight (140));
-
-        generic.setBounds (r);
+        // Both sections share the panel; only the current mode's is visible. The device row is
+        // first in both, so the one Refresh button sits beside whichever menu is shown.
+        auto layout = [this] (std::initializer_list<std::pair<juce::Component*, juce::Component*>> rows)
+        {
+            auto area = panel.reduced (10, 6);
+            for (auto [label, control] : rows)
+            {
+                auto row = area.removeFromTop (rowHeight).reduced (0, 3);
+                auto left = row.removeFromLeft (labelWidth);
+                if (label != nullptr) label->setBounds (left);
+                if (control == &captureBox || control == &sendBox)
+                {
+                    refresh.setBounds (row.removeFromRight (64));
+                    row.removeFromRight (6);
+                }
+                control->setBounds (row);
+            }
+        };
+        layout ({ { &captureFromLabel, &captureBox }, { &playbackLabel, &playbackBox },
+                  { &captureGainLabel, &captureGain }, { nullptr, &passInput } });
+        layout ({ { &sendToLabel, &sendBox }, { &sendGainLabel, &sendGain }, { nullptr, &onlyPlaying } });
     }
 
 private:
-    static constexpr int rowHeight = 30, labelWidth = 110, defaultItem = 1, missingItem = 10000;
+    using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+
+    static constexpr int rowHeight = 34, labelWidth = 104;
+    // Capture menu ids: the two default-device sources, then deviceBase + index into endpoints,
+    // then missingItem for a saved endpoint that is not currently present. The send menu uses
+    // sendDefaultItem in place of the two sources.
+    static constexpr int everythingItem = 1, wholeDefaultItem = 2, sendDefaultItem = 1,
+                         deviceBase = 10, missingItem = 10000;
+
+    static void tip (std::initializer_list<juce::SettableTooltipClient*> targets, const juce::String& text)
+    {
+        for (auto* t : targets) t->setTooltip (text);
+    }
+
+    bool isOn (const char* id) const { return proc.params.getRawParameterValue (id)->load() > 0.5f; }
+    int source() const { return (int) proc.params.getRawParameterValue ("source")->load(); }
+
+    void setParam (const char* id, float value)
+    {
+        auto* param = proc.params.getParameter (id);
+        if (param->convertFrom0to1 (param->getValue()) == value) return;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->convertTo0to1 (value));
+        param->endChangeGesture();
+    }
+
+    void setMode (bool send)
+    {
+        setParam ("capture", send ? 0.0f : 1.0f);
+        setParam ("send", send ? 1.0f : 0.0f);
+        syncMode();
+    }
+
+    // Lit buttons mirror the two parameters. A 1.0.x project with both on lights both and shows
+    // the capture section until a mode is clicked.
+    void syncMode()
+    {
+        const bool capture = isOn ("capture"), send = isOn ("send");
+        captureMode.setToggleState (capture, juce::dontSendNotification);
+        sendMode.setToggleState (send, juce::dontSendNotification);
+
+        const bool showSend = send && ! capture;
+        for (auto* c : captureSection) c->setVisible (! showSend);
+        for (auto* c : sendSection) c->setVisible (showSend);
+    }
 
     void timerCallback() override
     {
         status.setText (proc.statusText(), juce::dontSendNotification);
-        if (proc.getEndpointRevision() != shownRevision)
+        syncMode();
+        if (proc.getEndpointRevision() != shownRevision || source() != shownSource)
             populate();
     }
 
@@ -98,28 +210,33 @@ private:
     void populate()
     {
         shownRevision = proc.getEndpointRevision();
-        fill (captureBox, proc.getCaptureEndpoint(), true);
-        fill (sendBox, proc.getSendEndpoint(), false);
+        shownSource = source();
+
+        const auto c = proc.getCaptureEndpoint();
+        captureBox.clear (juce::dontSendNotification);
+        captureBox.addItem ("Everything except REAPER", everythingItem);
+        captureBox.addItem ("Whole default device", wholeDefaultItem);
+        captureBox.addSectionHeading ("Whole device (includes REAPER)");
+        addDevices (captureBox, c, c.id.isEmpty() ? (shownSource == 0 ? everythingItem : wholeDefaultItem) : missingItem);
+
+        const auto s = proc.getSendEndpoint();
+        sendBox.clear (juce::dontSendNotification);
+        sendBox.addItem ("Default device", sendDefaultItem);
+        sendBox.addSeparator();
+        addDevices (sendBox, s, s.id.isEmpty() ? sendDefaultItem : missingItem);
     }
 
-    // Item ids: defaultItem, then 2 + index into endpoints, then missingItem for a saved
-    // endpoint that is not currently present.
-    void fill (juce::ComboBox& box, const BridgeProcessor::Endpoint& chosen, bool forCapture)
+    void addDevices (juce::ComboBox& box, const BridgeProcessor::Endpoint& chosen, int selected)
     {
-        box.clear (juce::dontSendNotification);
-        box.addItem (forCapture ? "Default device (see Capture source)" : "Default device", defaultItem);
-
-        int selected = chosen.id.isEmpty() ? defaultItem : missingItem;
         for (size_t i = 0; i < endpoints.size(); ++i)
         {
             const auto& e = endpoints[i];
             auto text = juce::String::fromUTF8 (e.name.c_str());
-            if (forCapture) text = "Whole-device loopback: " + text;
-            if (e.isDefault) text << "  (current default)";
-            box.addItem (text, (int) i + 2);
+            if (e.isDefault) text << "  (default)";
+            box.addItem (text, deviceBase + (int) i);
 
             if (chosen.id.isNotEmpty() && chosen.id == juce::String::fromUTF8 (e.id.c_str()))
-                selected = (int) i + 2;
+                selected = deviceBase + (int) i;
         }
 
         if (selected == missingItem)
@@ -128,36 +245,58 @@ private:
         box.setSelectedId (selected, juce::dontSendNotification);
     }
 
-    void choose (juce::ComboBox& box, bool forCapture)
+    BridgeProcessor::Endpoint endpointFor (int id) const
     {
-        const int id = box.getSelectedId();
-        if (id == missingItem)
-            return;
+        if (id < deviceBase || id - deviceBase >= (int) endpoints.size()) return {};
+        const auto& found = endpoints[(size_t) (id - deviceBase)];
+        return { juce::String::fromUTF8 (found.id.c_str()), juce::String::fromUTF8 (found.name.c_str()) };
+    }
 
-        BridgeProcessor::Endpoint e;
-        if (id >= 2 && id - 2 < (int) endpoints.size())
-        {
-            const auto& found = endpoints[(size_t) (id - 2)];
-            e = { juce::String::fromUTF8 (found.id.c_str()), juce::String::fromUTF8 (found.name.c_str()) };
-        }
+    void chooseCapture()
+    {
+        const int id = captureBox.getSelectedId();
+        if (id == missingItem) return;
 
-        if (forCapture)
-            proc.setCaptureEndpoint (e);
-        else
-            proc.setSendEndpoint (e);
+        if (id == everythingItem || id == wholeDefaultItem)
+            setParam ("source", id == everythingItem ? 0.0f : 1.0f);
 
+        const auto e = endpointFor (id);
+        if (e != proc.getCaptureEndpoint()) proc.setCaptureEndpoint (e);
         populate(); // drops a "Missing" entry once something else is chosen
     }
 
+    void chooseSend()
+    {
+        const int id = sendBox.getSelectedId();
+        if (id == missingItem) return;
+
+        const auto e = endpointFor (id);
+        if (e != proc.getSendEndpoint()) proc.setSendEndpoint (e);
+        populate();
+    }
+
     BridgeProcessor& proc;
-    juce::GenericAudioProcessorEditor generic;
+    juce::TextButton captureMode { "Capture system audio" }, sendMode { "Send REAPER audio" };
+    juce::Label captureFromLabel { {}, "Capture from" }, sendToLabel { {}, "Send to" },
+                playbackLabel { {}, "On playback" }, captureGainLabel { {}, "Gain" }, sendGainLabel { {}, "Gain" };
+    juce::ComboBox captureBox, sendBox, playbackBox;
+    juce::Slider captureGain, sendGain;
+    juce::ToggleButton passInput { "Mix track input with capture" }, onlyPlaying { "Only while REAPER is playing" };
+    juce::TextButton refresh { "Refresh" };
     juce::Label status;
-    juce::Label captureLabel { {}, "Capture from" }, sendLabel { {}, "Send to" };
-    juce::ComboBox captureBox, sendBox;
-    juce::TextButton refresh { "Refresh devices" };
     juce::TooltipWindow tooltips { this, 500 };
+
+    const std::array<juce::Component*, 7> captureSection { &captureFromLabel, &captureBox, &playbackLabel, &playbackBox,
+                                                           &captureGainLabel, &captureGain, &passInput };
+    const std::array<juce::Component*, 5> sendSection { &sendToLabel, &sendBox, &sendGainLabel, &sendGain, &onlyPlaying };
+
+    std::unique_ptr<ComboAttachment> playbackAttachment;
+    std::unique_ptr<SliderAttachment> captureGainAttachment, sendGainAttachment;
+    std::unique_ptr<ButtonAttachment> passInputAttachment, onlyPlayingAttachment;
+
+    juce::Rectangle<int> panel;
     std::vector<AudioEndpoint> endpoints;
-    int shownRevision = -1;
+    int shownRevision = -1, shownSource = -1;
 };
 } // namespace
 
@@ -298,14 +437,17 @@ juce::String BridgeProcessor::statusText() const
     const bool captureWanted = captureOn->load() > 0.5f;
     const bool sendWanted = sendOn->load() > 0.5f;
 
-    juce::String s = capture.isRunning() || captureWanted ? juce::String (capture.status()) : "Capture off";
-    s << "\n" << (render.isRunning() || sendWanted ? juce::String (render.status()) : "Send off");
+    // Only the active stream(s) are listed; both appear only for a 1.0.x project with both on.
+    juce::StringArray lines;
+    if (capture.isRunning() || captureWanted) lines.add (capture.status());
+    if (render.isRunning() || sendWanted) lines.add (render.status());
+    if (lines.isEmpty()) lines.add ("Off - choose Capture system audio or Send REAPER audio");
 
     const auto c = getCaptureEndpoint(), d = getSendEndpoint();
     if (captureWanted && sendWanted && c.id.isNotEmpty() && c == d)
-        s << "  -  WARNING: capturing the device you send to will feed back";
+        lines.add ("WARNING: capturing the device you send to will feed back");
 
-    return s;
+    return lines.joinIntoString ("\n");
 }
 
 void BridgeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
