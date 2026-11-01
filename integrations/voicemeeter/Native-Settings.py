@@ -6,8 +6,11 @@ Profiles.py rollback snapshot and afterwards checks that the result matches the 
 
   save FILE                 export the live settings (Command.Save)
   restore FILE --yes        load FILE, then verify routing/levels/devices against a fresh export
-  test DIR                  round trip in a new private DIR: export, mark the idle Stereo Input 4,
+  test DIR                  round trip in a new private DIR: export, mark the free Stereo Input 5,
                             load the export, and check the mark is gone and nothing else moved
+
+Load restarts the audio engine, which would break a softphone call, so restore and test need
+--no-call-in-progress on a mixer set up as the softphone bridge.
 
 Settings files are private machine configuration: keep them out of Git.
 """
@@ -18,6 +21,7 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import Mixer_Guard  # noqa: E402
 import Profiles as P  # noqa: E402
 
 
@@ -63,10 +67,14 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("save"); p.add_argument("file", type=Path)
     p = sub.add_parser("restore"); p.add_argument("file", type=Path); p.add_argument("--yes", action="store_true")
-    p = sub.add_parser("test"); p.add_argument("dir", type=Path)
+    p.add_argument("--no-call-in-progress", action="store_true")
+    p = sub.add_parser("test"); p.add_argument("dir", type=Path); p.add_argument("--no-call-in-progress", action="store_true")
     args = parser.parse_args()
     P.connect()
     try:
+        if args.command != "save" and Mixer_Guard.bridge_configured(P) and not args.no_call_in_progress:
+            sys.exit("Refusing: Load restarts the audio engine and this mixer is the softphone bridge. "
+                     "Rerun with --no-call-in-progress once no call is up.")
         if args.command == "save":
             print(f"Saved {len(export(args.file))} bytes to {args.file}")
             return 0
@@ -87,6 +95,7 @@ def main():
             return 0
 
         # test
+        Mixer_Guard.require_free_strip(P, 4)
         args.dir.mkdir(parents=True, exist_ok=False)
         failures = 0
 
@@ -100,21 +109,21 @@ def main():
         original = export(args.dir / "before.xml")
         check(len(original) > 1000, "export written", f"{len(original)} bytes")
         try:
-            P.set_float("Strip[3].Gain", -6.0)
-            P.set_float("Strip[3].A3", 1.0)
-            P.set_string("Strip[3].Label", "LoadTest")
+            P.set_float("Strip[4].Gain", -6.0)
+            P.set_float("Strip[4].A3", 1.0)
+            P.set_string("Strip[4].Label", "LoadTest")
             time.sleep(0.8)
             marked = state()
-            check(marked[0]["Strip[3].Gain"] == -6.0 and marked[0]["Strip[3].Label"] == "LoadTest",
-                  "marker set on Stereo Input 4")
+            check(marked[0]["Strip[4].Gain"] == -6.0 and marked[0]["Strip[4].Label"] == "LoadTest",
+                  "marker set on Stereo Input 5")
 
             load(args.dir / "before.xml")
             after = state()
             diff = differences(before, after)
             check(not diff, "after Load, routing/levels/labels/devices equal the exported state", str(diff or ""))
             reexport = export(args.dir / "after.xml")
-            check(strip_settings(original, 4) == strip_settings(reexport, 4),
-                  "Stereo Input 4's full settings line is identical after Load")
+            check(strip_settings(original, 5) == strip_settings(reexport, 5),
+                  "Stereo Input 5's full settings line is identical after Load")
             changed = sum(1 for x, y in zip(original.splitlines(), reexport.splitlines()) if x != y)
             print(f"     re-export: {len(reexport)} bytes vs {len(original)}; {changed} differing lines")
         finally:

@@ -10,10 +10,12 @@ feeds "Voicemeeter In n+1" into hardware strip n and Bus[n].VAIO publishes bus A
   proof    Milestone 1 known signal and milestone 4 isolation without the extension. Adds A2 and B3
            to AUX Input (its A1 stays on), plays 700 Hz into "Voicemeeter AUX Input" and 1300 Hz
            into "Voicemeeter Input" together, and records B3: the AUX tone must arrive and the
-           Voicemeeter Input tone (still A1 only) must not.
-  proof-a  The same on hardware buses, with the extension: feeds "Voicemeeter In 4" into the idle
-           Stereo Input 4 and routes it first to A1, then to A3 only, while "Voicemeeter Input"
-           stays on A1. Out A1 and Out A3 are recorded at the same time in each pass.
+           Voicemeeter Input tone (still A1 only) must not. Refused on a softphone bridge mixer,
+           where B3 carries the mic to the call; use proof-a there.
+  proof-a  The same on hardware buses, with the extension: feeds "Voicemeeter In 5" into the free
+           Stereo Input 5 and routes it first to A1, then to A3 only, while "Voicemeeter Input"
+           stays on A1. Out A1 and Out A3 are recorded at the same time in each pass. Refused if
+           Stereo Input 5 is in use. The tones are faintly audible, so don't run it during a call.
 Everything changed is restored afterwards, even on error.
 """
 import argparse
@@ -39,6 +41,9 @@ OTHER_STRIP = 5
 remote = ctypes.WinDLL(str(DLL))
 remote.VBVMR_GetParameterFloat.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_float)]
 remote.VBVMR_SetParameterFloat.argtypes = [ctypes.c_char_p, ctypes.c_float]
+sys.path.insert(0, str(HERE))
+import Mixer_Guard  # noqa: E402
+import Profiles  # noqa: E402  (same DLL; Mixer_Guard reads through it)
 
 
 def get(name):
@@ -137,7 +142,7 @@ def meters_together(endpoints, seconds, *freqs):
 
 
 def run_proof_a(dbfs):
-    strip, in_ep, other_ep = 3, "Voicemeeter In 4", OTHER_ENDPOINT
+    strip, in_ep, other_ep = 4, "Voicemeeter In 5", OTHER_ENDPOINT
     out_a1, out_a3 = "Voicemeeter Out A1", "Voicemeeter Out A3"
     keys = [f"Strip[{strip}].{k}" for k in BUSES + ["VAIO", "Mute", "Gain"]] + ["Bus[0].VAIO", "Bus[2].VAIO"]
     saved = {k: get(k) for k in keys}
@@ -160,7 +165,7 @@ def run_proof_a(dbfs):
             players = [subprocess.Popen([str(VMTONE), ep, str(dbfs), "1.8", str(hz)], stdout=subprocess.DEVNULL)
                        for ep, hz in ((in_ep, 700), (other_ep, 1300))]
             time.sleep(0.5)
-            passes[f"In 4 -> {target}"] = meters_together([out_a1, out_a3], 0.8, 700, 1300)
+            passes[f"In 5 -> {target}"] = meters_together([out_a1, out_a3], 0.8, 700, 1300)
             for p in players:
                 p.wait(timeout=30)
     finally:
@@ -178,12 +183,12 @@ def run_proof_a(dbfs):
     def absent(db):
         return db < -70
 
-    a1, a3 = passes["In 4 -> A1"], passes["In 4 -> A3"]
+    a1, a3 = passes["In 5 -> A1"], passes["In 5 -> A3"]
     checks = {
-        "In 4 on A1 reaches Out A1": present(a1[out_a1][700], out_a1),
-        "In 4 on A1 not on Out A3": absent(a1[out_a3][700]),
-        "In 4 on A3 reaches Out A3": present(a3[out_a3][700], out_a3),
-        "In 4 on A3 leaves Out A1": absent(a3[out_a1][700]),
+        "In 5 on A1 reaches Out A1": present(a1[out_a1][700], out_a1),
+        "In 5 on A1 not on Out A3": absent(a1[out_a3][700]),
+        "In 5 on A3 reaches Out A3": present(a3[out_a3][700], out_a3),
+        "In 5 on A3 leaves Out A1": absent(a3[out_a1][700]),
         "Voicemeeter Input stays on Out A1": present(a1[out_a1][1300], out_a1) and present(a3[out_a1][1300], out_a1),
         "Voicemeeter Input never on Out A3": absent(a1[out_a3][1300]) and absent(a3[out_a3][1300]),
         "restored": restored,
@@ -204,6 +209,10 @@ if remote.VBVMR_Login() != 0:
     sys.exit("A running Voicemeeter mixer is required.")
 try:
     time.sleep(0.5)
+    if args.mode == "proof" and Mixer_Guard.bridge_configured(Profiles):
+        sys.exit("Refusing: on this mixer B3 carries the mic to the softphone call. Use proof-a.")
+    if args.mode == "proof-a":
+        Mixer_Guard.require_free_strip(Profiles, 4)
     result = {"buses": run_buses, "proof": lambda: run_proof(args.dbfs), "proof-a": lambda: run_proof_a(args.dbfs)}[args.mode]()
     if args.json:
         args.json.write_text(json.dumps(result, indent=1))

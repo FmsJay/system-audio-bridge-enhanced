@@ -72,3 +72,43 @@ Still open:
 - Mixed DPI (the mixer on the second monitor at a different scaling): the user accepted it as is.
 - Milestone 5 with real plugins: the user will test through the Audio Bridge (Measure-FX.py --fx "<name>").
 - Audio Bridge 1.1.0 REAPER checks and release: the user will test later.
+
+## Softphone jump-in built into the mod (2026-11-01; built, not installed)
+
+Requested by James through ITS WORK on JAMES-MAIN, to replace the floating Laptop-jump.ps1 window. Status: on this branch and compiled, setting off, NOT deployed. Running trial DLL is still 566FC20F. New build SHA256 716320102AA48ECAF0972C956E9ECBBCCA2F44B6ABEB0C0742168DD85D2AC12F (rebuild to reproduce). Do not restart Voicemeeter or touch strip 3, B3 or Bus[7] on the laptop until ITS WORK says its live test is finished and James approves at that moment.
+
+Shape:
+- tools\softphone\softphone_engine.hpp: the mic rules as a pure module, ported from Laptop-jump.ps1 as of 16:30 on 11/1 (mixer and host are ports, time is passed in).
+- tools\softphone\vm-softphone.cpp: hidden helper started by the DLL, with no window, console or startup item. It holds the hotkey on a message-only window, reads live-state.txt on its own thread, sends VBAN-Text, drives the Remote API and publishes status to named shared memory. It's a process so a stalled share or fault can't reach the mixer's threads, and so it can still tell the host to listen if the mixer dies. It logs mixer and host actions to Documents\Voicemeeter\softphone.log, never the transcript.
+- DLL (audio-shortcuts.patch): softphone_ui in vmchroma.cpp starts and watches the helper (relaunches after 5 s; terminates it if its heartbeat is over 10 s old, and its safe startup closes the mic), reads status without locks or I/O, and draws the banner through softphone_overlay.hpp in window_manager::render. Menu entries "Softphone: Automatic Mic" (0x133C, state in HKCU) and "Softphone: Open or Close Mic" (0x133D, the fallback if the hotkey is taken). It raises the mixer without focus when the mic opens automatically.
+- Taskbar: the helper turns the mixer's taskbar button red and adds a red badge (ITaskbarList3, verified from another process against the live mixer window) while the mic may be live, because the Potato window is often minimized or covered.
+- Setting: a softphone section in Documents\Voicemeeter\vmchroma.yaml with enabled, hostIp, stateFile, hotkey, sendBus, micStrip. Absent means off, so JAMES-MAIN's copy isn't affected. hostIp stays an address because the host's Command1 slot filters on the laptop's Tailscale source.
+
+Decisions agreed with ITS WORK and James:
+- A hand-opened mic closes when the state reaches call.
+- Host commands go out twice, 100 ms apart, and a pending repeat is replaced so a late talk can't follow a listen.
+- Mixer changes are read back and retried; a change unconfirmed after 2 s shows MIC STATE UNKNOWN. Close and stop-stream go in one batch, mute first, to avoid the dropped second batch.
+- A failed or partial read is "no new data"; an unknown state proves the monitor is alive but changes nothing.
+- Automatic off: nothing arms, opens or closes from person/machine; the hotkey arms and opens; idle/off/research still close; turning it off closes an automatically opened mic.
+- A 5 s share stall closes an automatically opened mic mid-call and a returning "person" reopens it. James accepted this as specified.
+- Additions beyond Laptop-jump: muting Bus[7] by hand in Potato counts as a hand close; an unexpected unmute while closed gets re-muted; nothing on the mixer is touched until setup is verified (vban.Enable, stream names, mic strip routed to the send bus), otherwise the banner says not set up; the transcript updates on every line.
+
+Tests that need no call, mixer or network: build-tools\Release\softphone-tests.exe (13 rule groups with a simulated mixer, including dropped batches) and Test-Softphone.py (real helper with --stub-mixer, a localhost UDP host and a temp state file: VBAN-Text bytes, status block, a real F24 press, a taken key picked up later, a stalled share simulated with a pipe, shutdown, mixer death, not set up, single instance). overlay-preview.exe renders every banner state over a saved mixer picture.
+
+Guards added because Stereo Input 4 now carries the call and B3 the mic:
+- Mixer_Guard.py refuses a strip with a device, routing or an incoming VBAN stream. Test-Profiles, Test-Routing, Native-Settings test and Signal-Check proof-a moved to the free Stereo Input 5 / In 5. Signal-Check proof is refused on a bridge mixer.
+- The preset bridge-send-in4 is now bridge-send-in5. The earlier section's Stereo Input 4 endpoint budget is out of date: only In 5 is free now.
+- Native-Settings restore/test need --no-call-in-progress; Deploy-Trial.ps1 needs -NoCallInProgress. Profiles.py never sets Bus[7].Mute on a bridge mixer.
+- These guards' refusals were checked, but the moved tests have not been re-run live: not during ITS WORK's test.
+
+Cutover (James's OK at that moment, no call up, ITS WORK's test finished): tools\softphone\Softphone-Cutover.ps1 -NoCallInProgress. It reports any Laptop-jump shortcut in shell:startup without removing it, closes the floating window gracefully, checks the hotkey is free, adds the yaml section with a backup, and deploys. Undo: restore the yaml backup, Deploy-Trial.ps1 -NoCallInProgress -Rollback, start Laptop-jump.cmd.
+
+Needs a restart, James or a real call:
+- The DLL side has only been compiled: helper launch and supervision, banner in the real window, menu entries, restore without focus while minimized.
+- The real RemoteMixer path in the helper: Bus[7] and stream read-back, setup check.
+- Exit order: whether the Bus[7] restore lands before Voicemeeter saves its settings, given the DLL waits up to 1.5 s in WM_DESTROY with the UI thread blocked (the Remote API may need that thread). Check Bus[7] in LastSettings after a clean exit. Also whether a mixer crash leaves the host in listen.
+- Real F9 once the floating window is closed; what else on this PC wants F9 (it is consumed system-wide while enabled).
+- A real call: person/machine switching, audio reaching the softphone, Laptop mic blocked in listen, and whether the banner and badge are hard enough to miss.
+
+Suggestions only, not built: a short chime when the mic opens or closes; a host acknowledgement over VBAN-Text so the banner can show the host really switched; recent transcript lines in the App Sessions panel; one-click bridge repair from the not-set-up banner; a click on the banner to flip the mic.
+

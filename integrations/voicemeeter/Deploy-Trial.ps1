@@ -1,18 +1,22 @@
 # Deploys a locally built vmchroma64.dll and vm-sessions.exe to the workspace runtime trial and
 # restarts the trial mixer (a few seconds of dropped audio). The DLL being replaced is kept beside
 # it as vmchroma64.rollback.dll; run with -Rollback to put it back. Mixer routing and levels are
-# compared before and after the restart.
+# compared before and after the restart. A restart drops any softphone call, so it refuses without
+# -NoCallInProgress.
 param(
+    [switch]$NoCallInProgress,
     [string]$Trial = 'D:\Agent Workspace\VoicemeeterMod\runtime-trial',
     [switch]$Rollback
 )
 $ErrorActionPreference = 'Stop'
+if (!$NoCallInProgress) { throw 'Refusing: this restarts Voicemeeter and would drop a call. Rerun with -NoCallInProgress when none is up.' }
 $install = Join-Path ${env:ProgramFiles(x86)} 'VB\Voicemeeter'
 $exe = Join-Path $Trial 'voicemeeter8x64_vmchroma.exe'
 $dll = Join-Path $Trial 'vmchroma64.dll'
 $saved = Join-Path $Trial 'vmchroma64.rollback.dll'
 $newDll = Join-Path $PSScriptRoot 'source\emkaix-voicemeeter-chroma-dbae284\out\vmchroma64.dll'
 $newPanel = Join-Path $PSScriptRoot 'build-tools\Release\vm-sessions.exe'
+$newHelper = Join-Path $PSScriptRoot 'build-tools\Release\vm-softphone.exe'
 $snapshot = Join-Path $PSScriptRoot 'Mixer-Snapshot.py'
 
 foreach ($f in @($exe, (Join-Path $Trial 'voicemeeter8x64.exe'))) {
@@ -21,7 +25,7 @@ foreach ($f in @($exe, (Join-Path $Trial 'voicemeeter8x64.exe'))) {
 if ($Rollback) {
     if (!(Test-Path -LiteralPath $saved)) { throw 'No rollback DLL saved.' }
 } else {
-    foreach ($f in @($newDll, $newPanel)) { if (!(Test-Path -LiteralPath $f)) { throw "Build first: $f is missing." } }
+    foreach ($f in @($newDll, $newPanel, $newHelper)) { if (!(Test-Path -LiteralPath $f)) { throw "Build first: $f is missing." } }
 }
 
 $before = Join-Path $env:TEMP 'vmchroma-before.json'
@@ -47,6 +51,9 @@ try {
         Copy-Item -LiteralPath $dll -Destination $saved -Force
         Copy-Item -LiteralPath $newDll -Destination $dll -Force
         Copy-Item -LiteralPath $newPanel -Destination $panelPath -Force
+        # The softphone helper leaves with the mixer once it has told the host to go back to listen.
+        foreach ($h in @(Get-Process -Name vm-softphone -ErrorAction SilentlyContinue)) { [void]$h.WaitForExit(5000) }
+        Copy-Item -LiteralPath $newHelper -Destination (Join-Path $Trial 'vm-softphone.exe') -Force
     }
 } finally {
     # Whatever happened above, never leave the user without a mixer.
@@ -57,7 +64,9 @@ $loaded = (Get-Process -Id $proc.Id).Modules | Where-Object ModuleName -eq 'vmch
 if (!$loaded -or $loaded.FileName -ne $dll) { throw "vmchroma64.dll from the trial is not loaded (got '$($loaded.FileName)')." }
 Write-Output "Running PID $($proc.Id) with $((Get-FileHash -LiteralPath $dll).Hash)"
 if ($running) {
-    python $snapshot compare $before
+    # The softphone helper mutes its send bus on startup, so that one difference is expected.
+    $expected = if (Get-Process -Name vm-softphone -ErrorAction SilentlyContinue) { 'Bus[7].Mute' } else { @() }
+    python $snapshot compare $before $expected
     if ($LASTEXITCODE) { throw 'Mixer state differs after the restart; see above.' }
     Remove-Item -LiteralPath $before
 }

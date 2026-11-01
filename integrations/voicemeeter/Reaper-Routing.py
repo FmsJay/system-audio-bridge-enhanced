@@ -22,6 +22,7 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import Mixer_Guard  # noqa: E402
 import Profiles as P  # noqa: E402  (shares its Remote API access and rollback snapshots)
 
 BUSES = ["A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3"]
@@ -93,6 +94,9 @@ def check(preset, device):
         missing = [b for b in preset.get("hear_on", []) if b not in r]
         if missing:
             warnings.append(f"strip {strip + 1} is not routed to {missing}")
+        busy = Mixer_Guard.vban_user(P, strip)
+        if busy:
+            problems.append(f"strip {strip + 1} is taken: {busy}")
         if strip < 5 and P.get_float(f"Strip[{strip}].VAIO") < 0.5:
             problems.append(f"strip {strip + 1}'s VAIO switch is off, so {preset.get('endpoint')} doesn't reach it")
         loop_bus = preset.get("recorded_bus") or (live_in[1] if live_in and live_in[0] == "bus" else None)
@@ -177,6 +181,9 @@ def main():
 
         if args.command == "apply":
             preset = presets.get(args.id) or sys.exit(f"Unknown preset {args.id}")
+            busy = Mixer_Guard.vban_user(P, preset["strip"]) if "strip" in preset else None
+            if busy:
+                sys.exit(f"Refusing: strip {preset['strip'] + 1} is taken: {busy}. Nothing was changed.")
             changes = []
             if preset["kind"] in ("bridge-send", "device"):
                 strip = preset["strip"]

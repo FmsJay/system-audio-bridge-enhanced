@@ -11,3 +11,10 @@ target_link_libraries(vmtone PRIVATE ole32)
 
 add_executable(vm-sessions WIN32 vm-sessions.cpp)
 target_link_libraries(vm-sessions PRIVATE ole32 comctl32 version shell32)
+
+# Softphone jump-in: the mic rules with their tests, and the hidden helper the mod DLL starts.
+add_executable(softphone-tests softphone/test_engine.cpp)
+add_executable(vm-softphone WIN32 softphone/vm-softphone.cpp)
+target_link_libraries(vm-softphone PRIVATE ws2_32 ole32 shell32)
+add_executable(overlay-preview softphone/overlay-preview.cpp)
+target_link_libraries(overlay-preview PRIVATE d2d1 dwrite windowscodecs ole32)

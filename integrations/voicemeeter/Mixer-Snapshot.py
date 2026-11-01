@@ -1,7 +1,8 @@
 """Small Remote API helper for Deploy-Trial.ps1.
 
   save <file>      write the strip/bus routing and level parameters to a JSON file
-  compare <file>   compare the live mixer with a saved file (exit 1 on any difference)
+  compare <file> [param ...]   compare the live mixer with a saved file, ignoring the named
+                   parameters (exit 1 on any other difference)
   shutdown         ask the running mixer to shut down cleanly
 """
 import ctypes
@@ -53,7 +54,8 @@ try:
     elif command == "compare":
         saved = json.loads(Path(sys.argv[2]).read_text())
         live = snapshot()
-        diff = {k: (v, live.get(k)) for k, v in saved.items() if abs(v - live.get(k, 1e9)) > 0.01}
+        ignored = set(sys.argv[3:])
+        diff = {k: (v, live.get(k)) for k, v in saved.items() if k not in ignored and abs(v - live.get(k, 1e9)) > 0.01}
         print(f"{len(saved)} parameters compared; differences: {diff or 'none'}")
         sys.exit(1 if diff else 0)
     elif command == "shutdown":

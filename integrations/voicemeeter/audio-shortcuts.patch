@@ -1,8 +1,316 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ac40212..186b18c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -116,12 +116,14 @@ endif ()
+ add_library(${TARGET_VMCHROMA} SHARED ${VMCHROMA_SOURCES})
+ target_include_directories(${TARGET_VMCHROMA} PUBLIC ${DETOURS_SOURCE})
+ target_include_directories(${TARGET_VMCHROMA} PUBLIC ${SPDLOG_INCLUDE_DIR})
++target_include_directories(${TARGET_VMCHROMA} PRIVATE ${CMAKE_SOURCE_DIR}/../../tools/softphone)
+ target_link_libraries(${TARGET_VMCHROMA} PRIVATE
+         lib_detours
+         yaml-cpp::yaml-cpp
+         Msimg32
+         Shlwapi
+         d2d1
++        dwrite
+         d3d11
+         dxgi
+         Version
+diff --git a/src/vmchroma/config_manager.cpp b/src/vmchroma/config_manager.cpp
+index a33be15..87d24d4 100644
+--- a/src/vmchroma/config_manager.cpp
++++ b/src/vmchroma/config_manager.cpp
+@@ -374,9 +374,47 @@ bool config_manager::load_config()
+     always_use_appname = get_value<YAML::NodeType::Scalar, bool>("potato", "alwaysUseAppName");
+     // include_system_session = get_value<YAML::NodeType::Scalar, bool>("potato", "includeSystemSoundSession");
+ 
++    // Softphone jump-in is per PC and off unless this file says otherwise.
++    if (static_cast<const YAML::Node&>(yaml_config)["softphone"].IsDefined())
++    {
++        softphone.enabled = get_value<YAML::NodeType::Scalar, bool>("softphone", "enabled", false).value_or(false);
++        softphone.host_ip = get_value<YAML::NodeType::Scalar, std::string>("softphone", "hostIp", false).value_or("");
++        softphone.state_file = get_value<YAML::NodeType::Scalar, std::string>("softphone", "stateFile", false).value_or("");
++        softphone.hotkey = get_value<YAML::NodeType::Scalar, std::string>("softphone", "hotkey", false).value_or("F9");
++        softphone.send_bus = get_value<YAML::NodeType::Scalar, uint32_t>("softphone", "sendBus", [](const uint32_t x) { return x <= 7; }, false).value_or(7);
++        softphone.mic_strip = get_value<YAML::NodeType::Scalar, uint32_t>("softphone", "micStrip", [](const uint32_t x) { return x <= 7; }, false).value_or(0);
++
++        if (softphone.enabled && (softphone.host_ip.empty() || softphone.state_file.empty()))
++        {
++            SPDLOG_ERROR("softphone is enabled but hostIp or stateFile is missing; leaving it off");
++            softphone.enabled = false;
++        }
++    }
++
+     return true;
+ }
+ 
++const softphone_config_t& config_manager::get_softphone()
++{
++    return softphone;
++}
++
++/**
++ * Whether automatic mic is on. Kept in the registry so the Potato menu can change it, and on unless turned off.
++ */
++bool config_manager::reg_get_softphone_auto()
++{
++    DWORD value = 1, size = sizeof(value);
++    const LSTATUS result = RegGetValueW(HKEY_CURRENT_USER, reg_sub_key_potato.c_str(), L"softphone_auto", RRF_RT_REG_DWORD, nullptr, &value, &size);
++    return result != ERROR_SUCCESS || value != 0;
++}
++
++void config_manager::reg_save_softphone_auto(bool on)
++{
++    const DWORD value = on ? 1 : 0;
++    RegSetKeyValueW(HKEY_CURRENT_USER, reg_sub_key_potato.c_str(), L"softphone_auto", REG_DWORD, &value, sizeof(value));
++}
++
+ /**
+  * Gets a color value from the yaml file in a case-insensitive way
+  * @param arg_col The color value in upper case
+diff --git a/src/vmchroma/config_manager.hpp b/src/vmchroma/config_manager.hpp
+index fc819ca..56e1619 100644
+--- a/src/vmchroma/config_manager.hpp
++++ b/src/vmchroma/config_manager.hpp
+@@ -21,6 +21,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ #include "utils.hpp"
+ #include "yaml-cpp/yaml.h"
+ 
++struct softphone_config_t
++{
++    bool enabled = false;
++    std::string host_ip;
++    std::string state_file;
++    std::string hotkey = "F9";
++    uint32_t send_bus = 7;
++    uint32_t mic_strip = 0;
++};
++
+ class config_manager
+ {
+     std::wstring BM_FILE_BG = L"bg.bmp";
+@@ -58,6 +68,7 @@ class config_manager
+     std::optional<std::map<std::string, std::string>> app_aliases;
+     std::optional<bool> always_use_appname;
+     // std::optional<bool> include_system_session;
++    softphone_config_t softphone;
+ 
+ private:
+     template <YAML::NodeType::value v, typename T, typename Validator>
+@@ -118,6 +129,9 @@ public:
+     const std::optional<std::vector<std::string>>& get_app_blacklist();
+     const std::optional<std::map<std::string, std::string>>& get_app_aliases();
+     const std::optional<bool>& get_always_use_appname();
++    const softphone_config_t& get_softphone();
++    bool reg_get_softphone_auto();
++    void reg_save_softphone_auto(bool on);
+     std::optional<std::string> cfg_get_color(const std::string& arg_col, const color_category& category);
+     const std::vector<uint8_t>& get_bm_data_main();
+     const std::vector<uint8_t>& get_bm_data_settings();
 diff --git a/src/vmchroma/vmchroma.cpp b/src/vmchroma/vmchroma.cpp
-index 5793e71..2a16595 100644
+index 5793e71..f7d80b4 100644
 --- a/src/vmchroma/vmchroma.cpp
 +++ b/src/vmchroma/vmchroma.cpp
-@@ -168,7 +168,12 @@ BOOL WINAPI hk_AppendMenuA(HMENU hMenu, UINT uFlags, UINT_PTR uIDNewItem, LPCSTR
+@@ -35,6 +35,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ #include "window_manager.hpp"
+ #include "config_manager.hpp"
+ #include "spdlog/fmt/bundled/ranges.h"
++#include "softphone_overlay.hpp"
+ 
+ //******************//
+ //      WINAPI      //
+@@ -93,6 +94,180 @@ static std::wstring file_version_buffer;
+ 
+ bool apply_hooks();
+ 
++//******************//
++//    SOFTPHONE     //
++//******************//
++
++// Softphone jump-in, when the per-PC setting is on: this side starts and watches vm-softphone.exe, draws what
++// it publishes, and passes on the menu commands. The mic rules, F9 and the network all live in the helper.
++namespace softphone_ui
++{
++    constexpr UINT_PTR kMenuAuto = 0x133C, kMenuFlip = 0x133D;
++    constexpr uint64_t kPollMs = 100, kHeartbeatMs = 3000, kHungMs = 10000, kRelaunchMs = 5000;
++    constexpr DWORD kExitWaitMs = 1500;
++
++    static bool enabled = false;
++    static bool auto_mode = true;
++    static HMENU menu = nullptr;
++    static HANDLE process = nullptr;
++    static HANDLE mapping = nullptr;
++    static const softphone::SharedStatus* shared = nullptr;
++    static softphone::SharedStatus latest = {};
++    static bool have_status = false;
++    static bool was_open = false;
++    static uint64_t next_poll = 0, next_launch = 0;
++    static softphone::View view;
++    static softphone::Overlay& overlay = *new softphone::Overlay();   // never freed: DirectWrite may be gone by process exit
++
++    static std::wstring folder_of_dll()
++    {
++        wchar_t path[MAX_PATH] = {};
++        HMODULE self = nullptr;
++        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                                reinterpret_cast<LPCWSTR>(&folder_of_dll), &self)
++            || !GetModuleFileNameW(self, path, MAX_PATH))
++            return {};
++        const wchar_t* slash = wcsrchr(path, L'\\');
++        return slash ? std::wstring(path, slash - path) : std::wstring{};
++    }
++
++    static HWND helper_window()
++    {
++        return FindWindowExW(HWND_MESSAGE, nullptr, softphone::kWindowClass, nullptr);
++    }
++
++    static void launch(HWND hwnd)
++    {
++        const auto& cfg = cm->get_softphone();
++        const auto host = utils::str_to_wstr(cfg.host_ip);
++        const auto state = utils::str_to_wstr(cfg.state_file);
++        const auto key = utils::str_to_wstr(cfg.hotkey);
++        const auto docs = utils::get_userprofile_path();
++        const std::wstring dir = folder_of_dll();
++        if (!host || !state || !key || dir.empty())
++            return;
++
++        std::wstring cmd = L"\"" + dir + L"\\vm-softphone.exe\" --parent " + std::to_wstring(GetCurrentProcessId())
++            + L" --mixer-hwnd " + std::to_wstring(reinterpret_cast<INT_PTR>(hwnd))
++            + L" --host \"" + *host + L"\" --state \"" + *state + L"\" --hotkey \"" + *key + L"\""
++            + L" --bus " + std::to_wstring(cfg.send_bus) + L" --mic-strip " + std::to_wstring(cfg.mic_strip)
++            + L" --auto " + (auto_mode ? L"1" : L"0");
++        if (docs)
++            cmd += L" --log \"" + *docs + L"\\softphone.log\"";
++
++        STARTUPINFOW si = {sizeof(si)};
++        PROCESS_INFORMATION pi = {};
++        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, dir.c_str(), &si, &pi))
++        {
++            CloseHandle(pi.hThread);
++            if (process)
++                CloseHandle(process);
++            process = pi.hProcess;
++        }
++        else
++            SPDLOG_ERROR("failed to start vm-softphone.exe: {}", GetLastError());
++    }
++
++    // The mic just opened by itself: bring the mixer up where it can be seen, without taking the keyboard.
++    static void show_without_focus(HWND hwnd)
++    {
++        if (IsIconic(hwnd) || !IsWindowVisible(hwnd))
++            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
++        const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
++        o_SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
++        o_SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
++    }
++
++    static void init()
++    {
++        const auto flavor = cm->get_current_flavor_id();
++        enabled = cm->get_softphone().enabled && flavor && *flavor == FLAVOR_POTATO;
++        if (!enabled)
++            return;
++        auto_mode = cm->reg_get_softphone_auto();
++        wm->set_main_overlay([](ID2D1DeviceContext* ctx, float w, float h) { overlay.draw(ctx, w, h, view); });
++    }
++
++    // Called from the main window's UI timer. No file or network access: a named-memory read and a process check.
++    static void tick(HWND hwnd)
++    {
++        if (!enabled)
++            return;
++        const uint64_t now = GetTickCount64();
++        if (now < next_poll)
++            return;
++        next_poll = now + kPollMs;
++
++        if (!shared)
++        {
++            mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, softphone::kStatusName);
++            if (mapping)
++                shared = static_cast<const softphone::SharedStatus*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(softphone::SharedStatus)));
++        }
++        if (shared && softphone::readStatus(shared, latest))
++            have_status = true;
++
++        const bool running = process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
++        const uint64_t age = have_status ? now - latest.heartbeat : UINT64_MAX;
++        const bool alive = running && age < kHeartbeatMs;
++
++        // Stuck rather than gone: replace it. Its safe startup closes the mic.
++        if (running && have_status && age > kHungMs)
++            TerminateProcess(process, 1);
++
++        if (!running && now >= next_launch)
++        {
++            next_launch = now + kRelaunchMs;
++            have_status = false;
++            launch(hwnd);
++        }
++
++        const bool open = alive && (latest.flags & softphone::kMicOpen) != 0;
++        if (open && !was_open && (latest.flags & softphone::kOpenedAutomatically) != 0)
++            show_without_focus(hwnd);
++        if (alive)
++            was_open = open;
++
++        // Before the first status there's nothing to report yet, unless the helper really isn't starting.
++        const softphone::SharedStatus empty = {};
++        if (alive)
++            view = softphone::describe(true, was_open, latest);
++        else if (running && !have_status)
++            view = softphone::describe(true, false, [] { softphone::SharedStatus s = {}; s.flags = softphone::kWaitingForMixer; return s; }());
++        else
++            view = softphone::describe(false, was_open, empty);
++    }
++
++    static void toggle_auto()
++    {
++        auto_mode = !auto_mode;
++        cm->reg_save_softphone_auto(auto_mode);
++        if (menu)
++            CheckMenuItem(menu, static_cast<UINT>(kMenuAuto), MF_BYCOMMAND | (auto_mode ? MF_CHECKED : MF_UNCHECKED));
++        if (HWND helper = helper_window())
++            PostMessageW(helper, softphone::kMsgSetAuto, auto_mode ? 1 : 0, 0);
++    }
++
++    static void flip()
++    {
++        if (HWND helper = helper_window())
++            PostMessageW(helper, softphone::kMsgFlip, 0, 0);
++    }
++
++    // The bus and stream go back to how setup left them, ideally before the mixer writes its settings.
++    static void shutdown()
++    {
++        if (!enabled || !process)
++            return;
++        enabled = false;
++        if (HWND helper = helper_window())
++        {
++            PostMessageW(helper, softphone::kMsgShutdown, 0, 0);
++            WaitForSingleObject(process, kExitWaitMs);
++        }
++    }
++}
++
+ //*****************************//
+ //      HOOKED FUNCTIONS       //
+ //*****************************//
+@@ -132,6 +307,8 @@ HANDLE WINAPI hk_CreateMutexA(LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bIni
+             SPDLOG_ERROR("hooking failed");
+             return o_CreateMutexA(lpMutexAttributes, bInitialOwner, lpName);
+         }
++
++        softphone_ui::init();
+     }
+ 
+     return o_CreateMutexA(lpMutexAttributes, bInitialOwner, lpName);
+@@ -168,7 +345,20 @@ BOOL WINAPI hk_AppendMenuA(HMENU hMenu, UINT uFlags, UINT_PTR uIDNewItem, LPCSTR
      {
          o_AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem);
  
@@ -12,14 +320,34 @@ index 5793e71..2a16595 100644
 +        o_AppendMenuA(hMenu, MF_STRING, 0x1338, "Windows Sound Settings");
 +        o_AppendMenuA(hMenu, MF_STRING, 0x1339, "Windows Volume Mixer");
 +        o_AppendMenuA(hMenu, MF_STRING, 0x133A, "Sound Control Panel");
++        if (softphone_ui::enabled)
++        {
++            softphone_ui::menu = hMenu;
++            o_AppendMenuA(hMenu, MF_SEPARATOR, 0, nullptr);
++            o_AppendMenuA(hMenu, MF_STRING | (softphone_ui::auto_mode ? MF_CHECKED : MF_UNCHECKED), softphone_ui::kMenuAuto, "Softphone: Automatic Mic");
++            o_AppendMenuA(hMenu, MF_STRING, softphone_ui::kMenuFlip, "Softphone: Open or Close Mic");
++            o_AppendMenuA(hMenu, MF_SEPARATOR, 0, nullptr);
++        }
 +        return o_AppendMenuA(hMenu, MF_STRING, 0x1337, VMCHROMA_VERSION);
      }
  
      // get tray menu handle
-@@ -441,6 +446,49 @@ BOOL WINAPI hk_TrackPopupMenu(HMENU hMenu, UINT uFlags, int x, int y, int nReser
+@@ -441,12 +631,68 @@ BOOL WINAPI hk_TrackPopupMenu(HMENU hMenu, UINT uFlags, int x, int y, int nReser
   */
  LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
  {
++    if (msg == WM_COMMAND && HIWORD(wParam) == 0 && lParam == 0 && LOWORD(wParam) == softphone_ui::kMenuAuto)
++    {
++        softphone_ui::toggle_auto();
++        return 0;
++    }
++
++    if (msg == WM_COMMAND && HIWORD(wParam) == 0 && lParam == 0 && LOWORD(wParam) == softphone_ui::kMenuFlip)
++    {
++        softphone_ui::flip();
++        return 0;
++    }
++
 +    if (msg == WM_COMMAND && HIWORD(wParam) == 0 && lParam == 0)
 +    {
 +        const wchar_t* target = nullptr;
@@ -66,7 +394,14 @@ index 5793e71..2a16595 100644
      if (msg == WM_COMMAND && LOWORD(wParam) == 0x1337)
          ShellExecuteW(nullptr, L"open", L"https://github.com/emkaix/voicemeeter-chroma", nullptr, nullptr, SW_SHOW);
  
-@@ -623,6 +671,14 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
+     if (msg == WM_TIMER && wParam == 12346)
+     {
+         const auto ret = o_WndProc_main(hwnd, msg, wParam, lParam);
++        softphone_ui::tick(hwnd);
+         wm->render(hwnd);
+         return ret;
+     }
+@@ -623,6 +869,14 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
  
          wm->set_cur_main_wnd_size(LOWORD(lParam), HIWORD(lParam));
  
@@ -81,3 +416,71 @@ index 5793e71..2a16595 100644
          return o_WndProc_main(hwnd, msg, wParam, lParam);
      }
  
+@@ -646,8 +900,15 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
+         return 1;
+     }
+ 
++    // Not WM_CLOSE: closing the window can leave the mixer running, and the softphone must keep running with it.
++    if (msg == WM_ENDSESSION && wParam)
++        softphone_ui::shutdown();
++
+     if (msg == WM_DESTROY)
+     {
++        softphone_ui::shutdown();
++        wm->set_main_overlay(nullptr);
++
+         RECT rc;
+         o_GetClientRect(hwnd, &rc);
+ 
+diff --git a/src/vmchroma/window_manager.cpp b/src/vmchroma/window_manager.cpp
+index 7a64b68..8123d8d 100644
+--- a/src/vmchroma/window_manager.cpp
++++ b/src/vmchroma/window_manager.cpp
+@@ -221,6 +221,9 @@ void window_manager::render(HWND hwnd)
+             D2D1_COMPOSITE_MODE_SOURCE_COPY
+         );
+ 
++        if (hwnd == hwnd_main && main_overlay)
++            main_overlay(wctx.d2d_context.get(), static_cast<float>(wctx.default_cx), static_cast<float>(wctx.default_cy));
++
+         winrt::check_hresult(wctx.d2d_context->EndDraw());
+ 
+         winrt::check_hresult(wctx.swap_chain->Present(1, 0));
+@@ -337,6 +340,11 @@ void window_manager::scale_to_main_wnd(int& x, int& y, int& cx, int& cy)
+     cy = MulDiv(cy, cur_main_height, default_main_height);
+ }
+ 
++void window_manager::set_main_overlay(std::function<void(ID2D1DeviceContext*, float, float)> draw)
++{
++    main_overlay = std::move(draw);
++}
++
+ void window_manager::resize_child_windows()
+ {
+     for (const auto& [hwnd, wctx] : wctx_map)
+diff --git a/src/vmchroma/window_manager.hpp b/src/vmchroma/window_manager.hpp
+index b1ac681..789381d 100644
+--- a/src/vmchroma/window_manager.hpp
++++ b/src/vmchroma/window_manager.hpp
+@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ #pragma once
+ 
+ 
++#include <functional>
+ #include <string_view>
+ #include <unordered_map>
+ #include <windows.h>
+@@ -48,6 +49,7 @@ typedef struct window_ctx
+ 
+ class window_manager
+ {
++    std::function<void(ID2D1DeviceContext*, float, float)> main_overlay;
+ private:
+     HWND hwnd_main = nullptr;
+     uint32_t ui_update_timer = 0;
+@@ -99,4 +101,5 @@ public:
+     void scale_coords_inverse(HWND hwnd, POINT& pt);
+     void scale_to_main_wnd(int& x, int& y, int& cx, int& cy);
+     void resize_child_windows();
++    void set_main_overlay(std::function<void(ID2D1DeviceContext*, float, float)> draw);
+ };

@@ -36,6 +36,8 @@ BUS_FLOATS = ["Gain", "Mute", "Mono"]
 # Bus[n].VAIO publishes A(n+1) on "Voicemeeter Out A(n+1)". Without the licence they read 0.
 VAIO_SLOTS = [f"Strip[{i}].VAIO" for i in range(5)] + [f"Bus[{i}].VAIO" for i in range(5)]
 HARDWARE = [f"Strip[{i}]" for i in range(5)] + [f"Bus[{i}]" for i in range(5)]
+# On a softphone bridge mixer this mute is the mic switch, owned by vm-softphone; a profile must never set it.
+BRIDGE_OWNED = {"Bus[7].Mute"}
 DEVICE_KINDS = {1: "mme", 3: "wdm", 4: "ks", 5: "asio"}
 
 remote = ctypes.WinDLL(str(Path(os.environ["ProgramFiles(x86)"]) / "VB/Voicemeeter/VoicemeeterRemote64.dll"))
@@ -201,8 +203,9 @@ def plan(profile, only=None):
         else:
             changes.append(("device", slot, have and f"{have['kind']}:{have['name']}", (want["kind"], local)))
 
+    bridge = get_string("vban.outstream[0].name") == "LaptopMic"
     for key, value in profile["parameters"].items():
-        if not in_scope(key) or key not in live_params:
+        if not in_scope(key) or key not in live_params or (bridge and key in BRIDGE_OWNED):
             continue
         current = live_params[key]
         if isinstance(value, str) or isinstance(current, str):
