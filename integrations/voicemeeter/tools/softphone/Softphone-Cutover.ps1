@@ -5,7 +5,7 @@
 #   3. checks that nothing else holds the hotkey
 #   4. turns the per-PC setting on in vmchroma.yaml, keeping a backup
 #   5. deploys the build and restarts Voicemeeter through Deploy-Trial.ps1
-# To go back: restore the yaml backup this prints, run Deploy-Trial.ps1 -NoCallInProgress -Rollback, start Laptop-jump.cmd.
+# To go back: restore the yaml backup this prints, run Deploy-Trial.ps1 -NoCallInProgress -Rollback, set Bus[7].Mute=0, start Laptop-jump.cmd.
 param(
     [switch]$NoCallInProgress,
     [string]$HostIp = '100.106.240.32',   # JAMES-MAIN on Tailscale; its Command1 slot filters on our Tailscale source address
