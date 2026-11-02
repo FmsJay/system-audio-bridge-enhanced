@@ -73,9 +73,15 @@ Still open:
 - Milestone 5 with real plugins: the user will test through the Audio Bridge (Measure-FX.py --fx "<name>").
 - Audio Bridge 1.1.0 REAPER checks and release: the user will test later.
 
-## Softphone jump-in built into the mod (2026-11-01; built, not installed)
+## Softphone jump-in built into the mod (2026-11-01; installed on the laptop)
 
-Requested by James through ITS WORK on JAMES-MAIN, to replace the floating Laptop-jump.ps1 window. Status: on this branch and compiled, setting off, NOT deployed. Running trial DLL is still 566FC20F. New build SHA256 716320102AA48ECAF0972C956E9ECBBCCA2F44B6ABEB0C0742168DD85D2AC12F (rebuild to reproduce). Do not restart Voicemeeter or touch strip 3, B3 or Bus[7] on the laptop until ITS WORK says its live test is finished and James approves at that moment.
+Requested by James through ITS WORK on JAMES-MAIN, to replace the floating Laptop-jump.ps1 window. Status: installed at 18:42 on 11/1 with James's OK, setting on in the laptop's vmchroma.yaml. Trial DLL SHA256 716320102AA48ECAF0972C956E9ECBBCCA2F44B6ABEB0C0742168DD85D2AC12F; rollback DLL is the previous 566FC20F build. A restart of Voicemeeter still needs James's OK at that moment, because he may be on a call.
+
+Checked on the installed version with no call up: the 121-value restart comparison showed no differences; vban.instream[0].quality stayed 2 and was saved as NQ='2'; the banner draws in the real window ("Mic off | Alert not running | F9 to talk", which was true: call_monitor.py wasn't publishing, last write 18:25); a real F9 opened the mic (host talk, Bus[7] unmuted, stream on, red banner and border, taskbar badge) and closed it (Bus[7] muted, host listen). Both menu entries are present, read from the popup's menu data, but they sit below App Sessions at the bottom of the menu and were off the visible part of the screen on the laptop's display.
+
+Not yet proven: exit order with the helper running (Bus[7] restored before settings are saved), a crash leaving the host in listen, show-without-focus while minimized, an automatic open from a real call, and the moved live tests.
+
+Found on the installed version and fixed in the engine, not yet installed: opening and closing by hand with no call up left vban.outstream[0].on=1 with Bus[7] muted (silent) because no hang-up comes to clear it. The running helper still has this until a restart; the build in build-tools\Release has the fix. Deploy-Trial.ps1 now keeps the rollback DLL when the DLL being deployed is unchanged.
 
 Shape:
 - tools\softphone\softphone_engine.hpp: the mic rules as a pure module, ported from Laptop-jump.ps1 as of 16:30 on 11/1 (mixer and host are ports, time is passed in).
@@ -93,7 +99,7 @@ Decisions agreed with ITS WORK and James:
 - A 5 s share stall closes an automatically opened mic mid-call and a returning "person" reopens it. James accepted this as specified.
 - Additions beyond Laptop-jump: muting Bus[7] by hand in Potato counts as a hand close; an unexpected unmute while closed gets re-muted; nothing on the mixer is touched until setup is verified (vban.Enable, stream names, mic strip routed to the send bus), otherwise the banner says not set up; the transcript updates on every line.
 
-Tests that need no call, mixer or network: build-tools\Release\softphone-tests.exe (13 rule groups with a simulated mixer, including dropped batches) and Test-Softphone.py (real helper with --stub-mixer, a localhost UDP host and a temp state file: VBAN-Text bytes, status block, a real F24 press, a taken key picked up later, a stalled share simulated with a pipe, shutdown, mixer death, not set up, single instance). overlay-preview.exe renders every banner state over a saved mixer picture.
+Tests that need no call, mixer or network: build-tools\Release\softphone-tests.exe (14 rule groups with a simulated mixer, including dropped batches) and Test-Softphone.py (real helper with --stub-mixer, a localhost UDP host and a temp state file: VBAN-Text bytes, status block, a real F24 press, a taken key picked up later, a stalled share simulated with a pipe, shutdown, mixer death, not set up, single instance). overlay-preview.exe renders every banner state over a saved mixer picture.
 
 Guards added because Stereo Input 4 now carries the call and B3 the mic:
 - Mixer_Guard.py refuses a strip with a device, routing or an incoming VBAN stream. Test-Profiles, Test-Routing, Native-Settings test and Signal-Check proof-a moved to the free Stereo Input 5 / In 5. Signal-Check proof is refused on a bridge mixer.
@@ -101,7 +107,7 @@ Guards added because Stereo Input 4 now carries the call and B3 the mic:
 - Native-Settings restore/test need --no-call-in-progress; Deploy-Trial.ps1 needs -NoCallInProgress. Profiles.py never sets Bus[7].Mute on a bridge mixer.
 - These guards' refusals were checked, but the moved tests have not been re-run live: not during ITS WORK's test.
 
-Cutover (James's OK at that moment, no call up, ITS WORK's test finished): tools\softphone\Softphone-Cutover.ps1 -NoCallInProgress. It reports any Laptop-jump shortcut in shell:startup without removing it, closes the floating window gracefully, checks the hotkey is free, adds the yaml section with a backup, and deploys. Undo: restore the yaml backup, Deploy-Trial.ps1 -NoCallInProgress -Rollback, start Laptop-jump.cmd.
+Cutover (James's OK at that moment, no call up, ITS WORK's test finished): tools\softphone\Softphone-Cutover.ps1 -NoCallInProgress. It reports any Laptop-jump shortcut in shell:startup without removing it, closes the floating window gracefully, checks the hotkey is free, adds the yaml section with a backup, and deploys. Undo: restore the yaml backup, Deploy-Trial.ps1 -NoCallInProgress -Rollback, start Laptop-jump.cmd. The restart comparison also covers vban.instream[0].quality (2, Medium, set by bridge-laptop.ps1 setup; saved settings still held NQ='1' on 2026-11-01 because Voicemeeter writes them only on a clean exit). If the comparison reports it changed, set it back to 2 through the Remote API. The helper's setup check does not look at quality, so any value counts as set up.
 
 Needs a restart, James or a real call:
 - The DLL side has only been compiled: helper launch and supervision, banner in the real window, menu entries, restore without focus while minimized.

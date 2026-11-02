@@ -14,21 +14,21 @@ import time
 
 FIELDS = (("Strip", ["Gain", "Mute", "Solo", "Mono", "A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3"]),
           ("Bus", ["Gain", "Mute", "Mono"]))
-remote = ctypes.WinDLL(str(Path(os.environ["ProgramFiles(x86)"]) / "VB/Voicemeeter/VoicemeeterRemote64.dll"))
+# Only saved to disk on a clean exit, and nothing sets it again once the floating window is retired.
+EXTRA = ("vban.instream[0].quality",)
+remote =ctypes.WinDLL(str(Path(os.environ["ProgramFiles(x86)"]) / "VB/Voicemeeter/VoicemeeterRemote64.dll"))
 remote.VBVMR_GetParameterFloat.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_float)]
 remote.VBVMR_SetParameterFloat.argtypes = [ctypes.c_char_p, ctypes.c_float]
 
 
 def snapshot():
     result = {}
-    for kind, fields in FIELDS:
-        for index in range(8):
-            for field in fields:
-                name = f"{kind}[{index}].{field}"
-                value = ctypes.c_float()
-                if remote.VBVMR_GetParameterFloat(name.encode(), ctypes.byref(value)) != 0:
-                    raise RuntimeError(f"Cannot read {name}")
-                result[name] = round(value.value, 3)
+    names = [f"{kind}[{index}].{field}" for kind, fields in FIELDS for index in range(8) for field in fields]
+    for name in names + list(EXTRA):
+        value = ctypes.c_float()
+        if remote.VBVMR_GetParameterFloat(name.encode(), ctypes.byref(value)) != 0:
+            raise RuntimeError(f"Cannot read {name}")
+        result[name] = round(value.value, 3)
     return result
 
 

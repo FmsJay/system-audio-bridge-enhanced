@@ -97,6 +97,14 @@ public:
     void press (uint64_t now)
     {
         if (shuttingDown) return;
+        // Closed by hand with no call up: no hang-up will ever come to stop the stream.
+        if (talking && (call == CallState::Unknown || call == CallState::Idle || call == CallState::Off || call == CallState::Research))
+        {
+            byHand = false;
+            armed = false;   // before closing, so both go out in one batch, mute first
+            setTalk (false, now);
+            return;
+        }
         byHand = true;
         setTalk (! talking, now);
     }

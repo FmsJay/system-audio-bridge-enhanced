@@ -240,6 +240,28 @@ void byHandRules()
     CHECK (r.st().micOpen);                         // and automatic is back for the new call
 }
 
+void byHandWithNoCall()
+{
+    // No hang-up will come, so closing also stops the stream, monitor up or not.
+    for (const bool monitorUp : { true, false })
+    {
+        Rig r;
+        if (monitorUp) r.alive();
+        r.press();
+        CHECK (r.st().micOpen && r.stream() > 0.5f && r.bus() < 0.5f);
+        r.press();
+        CHECK (! r.st().micOpen && r.micReallyClosed() && r.stream() < 0.5f);
+        CHECK (! r.st().byHand && ! r.st().armed);
+    }
+    // In a call the stream stays up for the next press.
+    Rig r;
+    r.alive();
+    r.state ("call");
+    r.press();
+    r.press();
+    CHECK (! r.st().micOpen && r.micReallyClosed() && r.stream() > 0.5f && r.st().byHand);
+}
+
 void staleMonitor()
 {
     // Automatic mic: closes after 5 s, stream stops.
@@ -512,6 +534,7 @@ int main()
         { "automatic flow and order", automaticFlowAndOrder },
         { "off/research/idle close", offAndResearchClose },
         { "by-hand rules", byHandRules },
+        { "by hand with no call", byHandWithNoCall },
         { "stale monitor", staleMonitor },
         { "failed and bad reads", failedAndBadReads },
         { "transcript follows every line", transcriptFollowsEveryLine },

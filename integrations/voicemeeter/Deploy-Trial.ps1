@@ -48,7 +48,8 @@ try {
     if ($Rollback) {
         Copy-Item -LiteralPath $saved -Destination $dll -Force
     } else {
-        Copy-Item -LiteralPath $dll -Destination $saved -Force
+        # Redeploying the same DLL (a helper-only update) must not overwrite the real rollback copy.
+        if ((Get-FileHash -LiteralPath $dll).Hash -ne (Get-FileHash -LiteralPath $newDll).Hash) { Copy-Item -LiteralPath $dll -Destination $saved -Force }
         Copy-Item -LiteralPath $newDll -Destination $dll -Force
         Copy-Item -LiteralPath $newPanel -Destination $panelPath -Force
         # The softphone helper leaves with the mixer once it has told the host to go back to listen.
